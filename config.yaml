@@ -10,9 +10,9 @@ training:
   target_map: "roughness"  # or "metallic"
   resolution: 512
 
-  # Batch & steps
-  batch_size: 4
-  gradient_accumulation_steps: 4
+  # Batch & steps (reduced for memory)
+  batch_size: 1
+  gradient_accumulation_steps: 16
   max_train_steps: 10000
   num_workers: 4
   seed: 42

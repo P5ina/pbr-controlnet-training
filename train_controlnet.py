@@ -144,6 +144,15 @@ def train(config: dict):
     if config["training"]["gradient_checkpointing"]:
         controlnet.enable_gradient_checkpointing()
 
+    # Enable xformers for memory efficiency
+    try:
+        import xformers
+        controlnet.enable_xformers_memory_efficient_attention()
+        unet.enable_xformers_memory_efficient_attention()
+        print("xformers enabled")
+    except ImportError:
+        print("xformers not available, using default attention")
+
     # Dataset
     print("Loading dataset...")
     dataset = PBRControlNetDataset(
@@ -180,10 +189,14 @@ def train(config: dict):
         controlnet, optimizer, dataloader, lr_scheduler
     )
 
-    # Move frozen models to device
-    vae.to(accelerator.device, dtype=torch.float32)
-    unet.to(accelerator.device, dtype=torch.float32)
-    text_encoder.to(accelerator.device, dtype=torch.float32)
+    # Move frozen models to device with fp16 to save memory
+    weight_dtype = torch.float16 if config["training"]["mixed_precision"] == "fp16" else torch.float32
+    vae.to(accelerator.device, dtype=weight_dtype)
+    unet.to(accelerator.device, dtype=weight_dtype)
+    text_encoder.to(accelerator.device, dtype=weight_dtype)
+
+    # Enable VAE slicing for lower memory
+    vae.enable_slicing()
 
     # Training loop
     global_step = 0
