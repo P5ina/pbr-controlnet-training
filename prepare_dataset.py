@@ -124,25 +124,25 @@ def prepare_controlnet_dataset(
     print(f"Resolution: {resolution}x{resolution}")
     print(f"Workers: {num_workers}")
 
-    # Use streaming
+    # Download full dataset (faster with good internet)
     dataset = load_dataset(
         "gvecchio/MatSynth",
         split=split,
-        streaming=True,
-    ).shuffle(seed=42, buffer_size=100)  # Buffer helps with throughput
+        num_proc=num_workers,
+    )
 
     processed = 0
     skipped = 0
     prompts = {}
 
-    total_estimate = max_samples if max_samples else 4000
-    print(f"\nProcessing materials (target: {total_estimate})...")
+    total_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
+    print(f"\nProcessing {total_samples} materials...")
 
     # Collect samples in batches for parallel processing
     batch_size = num_workers * 4
     batch = []
 
-    pbar = tqdm(total=total_estimate, unit="mat")
+    pbar = tqdm(total=total_samples, unit="mat")
 
     for idx, sample in enumerate(dataset):
         if max_samples and processed >= max_samples:
@@ -239,10 +239,6 @@ def main():
             args.output, args.target, args.split, args.max_samples,
             args.resolution, args.num_workers
         )
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
