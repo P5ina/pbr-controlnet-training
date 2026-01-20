@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.env
+.venv/
+venv/
+
+# Data
+data/
+output/
+wandb/
+
+# Model files
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+
+# Logs
+*.log

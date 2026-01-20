@@ -1,0 +1,45 @@
+# ControlNet Training Config for PBR Maps
+
+model:
+  # Base model (SD 1.5 is lighter and faster to train)
+  base_model: "runwayml/stable-diffusion-v1-5"
+
+training:
+  # Dataset
+  data_dir: "./data"
+  target_map: "roughness"  # or "metallic"
+  resolution: 512
+
+  # Batch & steps
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  max_train_steps: 10000
+  num_workers: 4
+  seed: 42
+
+  # Learning rate
+  learning_rate: 1.0e-5
+  lr_scheduler: "cosine"
+  lr_warmup_steps: 500
+
+  # Optimizer
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_weight_decay: 0.01
+  max_grad_norm: 1.0
+
+  # Optimizations
+  mixed_precision: "fp16"
+  gradient_checkpointing: true
+
+  # Validation
+  validation_steps: 500
+
+checkpointing:
+  output_dir: "./output"
+  save_steps: 2000
+
+logging:
+  use_wandb: true
+  project_name: "pbr-controlnet"
+  log_every_n_steps: 10
