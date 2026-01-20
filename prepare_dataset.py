@@ -124,11 +124,12 @@ def prepare_controlnet_dataset(
     print(f"Resolution: {resolution}x{resolution}")
     print(f"Workers: {num_workers}")
 
+    # Use streaming
     dataset = load_dataset(
         "gvecchio/MatSynth",
         split=split,
         streaming=True,
-    )
+    ).shuffle(seed=42, buffer_size=100)  # Buffer helps with throughput
 
     processed = 0
     skipped = 0
