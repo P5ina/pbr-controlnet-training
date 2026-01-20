@@ -128,7 +128,6 @@ def prepare_controlnet_dataset(
     dataset = load_dataset(
         "gvecchio/MatSynth",
         split=split,
-        num_proc=num_workers,
     )
 
     processed = 0
