@@ -315,39 +315,54 @@ def validate_and_log(
     controlnet, unet, vae, text_encoder, tokenizer,
     scheduler, config, step, device
 ):
-    """Generate validation images."""
+    """Generate validation images and create comparison grid."""
     controlnet.eval()
 
-    print(f"\nValidation at step {step}...")
+    target_map = config["training"]["target_map"]
+    print(f"\nValidation at step {step} ({target_map})...")
 
-    # Load a sample conditioning image
-    data_dir = Path(config["training"]["data_dir"]) / config["training"]["target_map"]
+    # Load sample conditioning images
+    data_dir = Path(config["training"]["data_dir"]) / target_map
     cond_dir = data_dir / "conditioning"
+    target_dir = data_dir / "target"
+
     sample_files = list(cond_dir.glob("*.png"))[:4]
 
     if not sample_files:
         print("No validation images found")
         return
 
+    all_inputs = []
+    all_outputs = []
+    all_targets = []
+
     for sample_file in sample_files:
-        # Load conditioning
+        # Load conditioning (basecolor)
         cond_img = Image.open(sample_file).convert("RGB")
         cond_img = cond_img.resize((512, 512), Image.LANCZOS)
         cond_tensor = torch.from_numpy(
             np.array(cond_img).astype(np.float32) / 127.5 - 1.0
         ).permute(2, 0, 1).unsqueeze(0).to(device)
 
+        # Load ground truth target
+        target_file = target_dir / sample_file.name
+        if target_file.exists():
+            target_img = Image.open(target_file).convert("RGB")
+            target_img = target_img.resize((512, 512), Image.LANCZOS)
+        else:
+            target_img = Image.new("RGB", (512, 512), (128, 128, 128))
+
         # Encode prompt
-        prompt = f"pbr {config['training']['target_map']} map, high quality"
+        prompt = f"pbr {target_map} map, high quality, seamless texture"
         input_ids = tokenizer(
             prompt, padding="max_length", max_length=77,
             truncation=True, return_tensors="pt"
         ).input_ids.to(device)
         encoder_hidden_states = text_encoder(input_ids)[0]
 
-        # Generate
+        # Generate with more steps for better quality
         latents = torch.randn(1, 4, 64, 64, device=device)
-        scheduler.set_timesteps(20, device=device)
+        scheduler.set_timesteps(30, device=device)
 
         for t in scheduler.timesteps:
             down_samples, mid_sample = controlnet(
@@ -365,23 +380,51 @@ def validate_and_log(
         latents = latents / vae.config.scaling_factor
         image = vae.decode(latents).sample
         image = (image.clamp(-1, 1) + 1) / 2
-        image = (image[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+        output_img = (image[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
 
-        # Save
-        out_dir = Path(config["checkpointing"]["output_dir"]) / "validation" / f"step_{step}"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        all_inputs.append(np.array(cond_img))
+        all_outputs.append(output_img)
+        all_targets.append(np.array(target_img))
 
-        Image.fromarray(image).save(out_dir / f"{sample_file.stem}_output.png")
-        cond_img.save(out_dir / f"{sample_file.stem}_input.png")
+    # Create comparison grid: Input | Output | Ground Truth
+    grid_rows = []
+    for inp, out, tgt in zip(all_inputs, all_outputs, all_targets):
+        row = np.concatenate([inp, out, tgt], axis=1)
+        grid_rows.append(row)
 
-        # Log to wandb
-        if config["logging"]["use_wandb"] and HAS_WANDB:
+    grid = np.concatenate(grid_rows, axis=0)
+
+    # Save locally
+    out_dir = Path(config["checkpointing"]["output_dir"]) / "validation" / f"step_{step}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    Image.fromarray(grid).save(out_dir / "comparison_grid.png")
+
+    for i, (inp, out, tgt) in enumerate(zip(all_inputs, all_outputs, all_targets)):
+        Image.fromarray(inp).save(out_dir / f"{i:02d}_input_basecolor.png")
+        Image.fromarray(out).save(out_dir / f"{i:02d}_output_{target_map}.png")
+        Image.fromarray(tgt).save(out_dir / f"{i:02d}_target_{target_map}.png")
+
+    # Log to wandb
+    if config["logging"]["use_wandb"] and HAS_WANDB:
+        # Log comparison grid
+        wandb.log({
+            f"val/comparison_grid": wandb.Image(
+                grid,
+                caption=f"Step {step} | Input (basecolor) | Output ({target_map}) | Ground Truth"
+            ),
+        }, step=step)
+
+        # Log individual samples
+        for i, (inp, out, tgt) in enumerate(zip(all_inputs, all_outputs, all_targets)):
             wandb.log({
-                f"val/{sample_file.stem}_input": wandb.Image(cond_img),
-                f"val/{sample_file.stem}_output": wandb.Image(image),
+                f"val/sample_{i}/input": wandb.Image(inp, caption="Basecolor"),
+                f"val/sample_{i}/output": wandb.Image(out, caption=f"Generated {target_map}"),
+                f"val/sample_{i}/target": wandb.Image(tgt, caption=f"Ground truth {target_map}"),
             }, step=step)
 
     print(f"Validation images saved to {out_dir}")
+    print(f"  - comparison_grid.png (Input | Output | Ground Truth)")
     controlnet.train()
 
 

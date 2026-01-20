@@ -32,8 +32,9 @@ training:
   mixed_precision: "fp16"
   gradient_checkpointing: true
 
-  # Validation
-  validation_steps: 500
+  # Validation (every 250 steps = see progress frequently)
+  validation_steps: 250
+  num_validation_samples: 4
 
 checkpointing:
   output_dir: "./output"
