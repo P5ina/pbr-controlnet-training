@@ -20,11 +20,11 @@ python prepare_dataset.py --output ./data --all --max-samples 4000
 
 # Train roughness ControlNet
 echo "Training roughness ControlNet..."
-accelerate launch train_controlnet.py --config config.yaml
+accelerate launch --mixed_precision fp16 train_controlnet.py --config config.yaml
 
 # Train metallic ControlNet
 echo "Training metallic ControlNet..."
-accelerate launch train_controlnet.py --config config_metallic.yaml
+accelerate launch --mixed_precision fp16 train_controlnet.py --config config_metallic.yaml
 
 echo "Training complete!"
 echo "Models saved to ./output/"
