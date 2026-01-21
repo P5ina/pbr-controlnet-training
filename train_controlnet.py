@@ -387,11 +387,16 @@ def validate_and_log(
 
         for t in scheduler.timesteps:
             down_samples, mid_sample = controlnet(
-                latents, t, encoder_hidden_states,
+                latents, t, encoder_hidden_states.to(dtype=weight_dtype),
                 controlnet_cond=cond_tensor, return_dict=False
             )
+            # Convert ControlNet outputs to weight_dtype for UNet
+            down_samples = [s.to(dtype=weight_dtype) for s in down_samples]
+            mid_sample = mid_sample.to(dtype=weight_dtype)
+
             noise_pred = unet(
-                latents, t, encoder_hidden_states,
+                latents.to(dtype=weight_dtype), t,
+                encoder_hidden_states.to(dtype=weight_dtype),
                 down_block_additional_residuals=down_samples,
                 mid_block_additional_residual=mid_sample,
             ).sample
