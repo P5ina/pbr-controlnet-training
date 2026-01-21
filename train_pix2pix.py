@@ -240,12 +240,6 @@ def train(config):
             cond = batch["conditioning"].to(device)
             target = batch["target"].to(device)
 
-            batch_size = cond.shape[0]
-
-            # Ground truths
-            valid = torch.ones(batch_size, 1, 30, 30, device=device)
-            fake = torch.zeros(batch_size, 1, 30, 30, device=device)
-
             # -----------------
             # Train Generator
             # -----------------
@@ -256,6 +250,8 @@ def train(config):
 
             # GAN loss
             pred_fake = discriminator(cond, gen_output)
+            valid = torch.ones_like(pred_fake)
+            fake = torch.zeros_like(pred_fake)
             loss_GAN = criterion_GAN(pred_fake, valid)
 
             # L1 loss
