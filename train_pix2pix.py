@@ -381,23 +381,25 @@ def save_final(generator, config):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     torch.save(generator.state_dict(), output_dir / "generator.pth")
-
-    # Also save as ONNX for easier deployment
-    dummy_input = torch.randn(1, 3, 512, 512)
-    generator.cpu().eval()
-    torch.onnx.export(
-        generator,
-        dummy_input,
-        output_dir / "generator.onnx",
-        input_names=["basecolor"],
-        output_names=["output"],
-        dynamic_axes={"basecolor": {0: "batch"}, "output": {0: "batch"}},
-        opset_version=11
-    )
-
     print(f"Saved final model to {output_dir}")
     print(f"  - generator.pth (PyTorch)")
-    print(f"  - generator.onnx (ONNX)")
+
+    # Try to save as ONNX for easier deployment
+    try:
+        dummy_input = torch.randn(1, 3, 512, 512)
+        generator.cpu().eval()
+        torch.onnx.export(
+            generator,
+            dummy_input,
+            output_dir / "generator.onnx",
+            input_names=["basecolor"],
+            output_names=["output"],
+            dynamic_axes={"basecolor": {0: "batch"}, "output": {0: "batch"}},
+            opset_version=11
+        )
+        print(f"  - generator.onnx (ONNX)")
+    except Exception as e:
+        print(f"  - ONNX export skipped: {e}")
 
 
 def main():
