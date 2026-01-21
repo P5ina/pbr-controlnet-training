@@ -254,14 +254,21 @@ def train(config: dict):
                     return_dict=False,
                 )
 
+                # Convert ControlNet outputs to weight_dtype for UNet
+                down_block_res_samples = [
+                    sample.to(dtype=weight_dtype) for sample in down_block_res_samples
+                ]
+                mid_block_res_sample = mid_block_res_sample.to(dtype=weight_dtype)
+
                 # UNet forward with ControlNet residuals
-                noise_pred = unet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    down_block_additional_residuals=down_block_res_samples,
-                    mid_block_additional_residual=mid_block_res_sample,
-                ).sample
+                with torch.no_grad():
+                    noise_pred = unet(
+                        noisy_latents.to(dtype=weight_dtype),
+                        timesteps,
+                        encoder_hidden_states=encoder_hidden_states.to(dtype=weight_dtype),
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_sample,
+                    ).sample
 
                 # Loss
                 loss = F.mse_loss(noise_pred, noise, reduction="mean")
