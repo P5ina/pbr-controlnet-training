@@ -215,10 +215,10 @@ def train(config: dict):
         for batch in dataloader:
             with accelerator.accumulate(controlnet):
                 # Encode conditioning image (basecolor)
-                conditioning = batch["conditioning"].to(accelerator.device)
+                conditioning = batch["conditioning"].to(accelerator.device, dtype=weight_dtype)
 
                 # Encode target image
-                target = batch["target"].to(accelerator.device)
+                target = batch["target"].to(accelerator.device, dtype=weight_dtype)
                 with torch.no_grad():
                     latents = vae.encode(target).latent_dist.sample()
                     latents = latents * vae.config.scaling_factor
@@ -300,7 +300,8 @@ def train(config: dict):
                     if accelerator.is_main_process:
                         validate_and_log(
                             controlnet, unet, vae, text_encoder, tokenizer,
-                            noise_scheduler, config, global_step, accelerator.device
+                            noise_scheduler, config, global_step, accelerator.device,
+                            weight_dtype=weight_dtype
                         )
 
                 # Save checkpoint
@@ -326,7 +327,7 @@ def train(config: dict):
 @torch.no_grad()
 def validate_and_log(
     controlnet, unet, vae, text_encoder, tokenizer,
-    scheduler, config, step, device
+    scheduler, config, step, device, weight_dtype=torch.float16
 ):
     """Generate validation images and create comparison grid."""
     controlnet.eval()
@@ -355,7 +356,7 @@ def validate_and_log(
         cond_img = cond_img.resize((512, 512), Image.LANCZOS)
         cond_tensor = torch.from_numpy(
             np.array(cond_img).astype(np.float32) / 127.5 - 1.0
-        ).permute(2, 0, 1).unsqueeze(0).to(device)
+        ).permute(2, 0, 1).unsqueeze(0).to(device, dtype=weight_dtype)
 
         # Load ground truth target
         target_file = target_dir / sample_file.name
@@ -374,7 +375,7 @@ def validate_and_log(
         encoder_hidden_states = text_encoder(input_ids)[0]
 
         # Generate with more steps for better quality
-        latents = torch.randn(1, 4, 64, 64, device=device)
+        latents = torch.randn(1, 4, 64, 64, device=device, dtype=weight_dtype)
         scheduler.set_timesteps(30, device=device)
 
         for t in scheduler.timesteps:
