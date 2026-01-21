@@ -261,14 +261,14 @@ def train(config: dict):
                 mid_block_res_sample = mid_block_res_sample.to(dtype=weight_dtype)
 
                 # UNet forward with ControlNet residuals
-                with torch.no_grad():
-                    noise_pred = unet(
-                        noisy_latents.to(dtype=weight_dtype),
-                        timesteps,
-                        encoder_hidden_states=encoder_hidden_states.to(dtype=weight_dtype),
-                        down_block_additional_residuals=down_block_res_samples,
-                        mid_block_additional_residual=mid_block_res_sample,
-                    ).sample
+                # Note: UNet is frozen but gradients must flow through it to ControlNet
+                noise_pred = unet(
+                    noisy_latents.to(dtype=weight_dtype),
+                    timesteps,
+                    encoder_hidden_states=encoder_hidden_states.to(dtype=weight_dtype),
+                    down_block_additional_residuals=down_block_res_samples,
+                    mid_block_additional_residual=mid_block_res_sample,
+                ).sample
 
                 # Loss
                 loss = F.mse_loss(noise_pred, noise, reduction="mean")
