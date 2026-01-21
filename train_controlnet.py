@@ -403,7 +403,7 @@ def validate_and_log(
             latents = scheduler.step(noise_pred, t, latents).prev_sample
 
         # Decode
-        latents = latents / vae.config.scaling_factor
+        latents = latents.to(dtype=weight_dtype) / vae.config.scaling_factor
         image = vae.decode(latents).sample
         image = (image.clamp(-1, 1) + 1) / 2
         output_img = (image[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
