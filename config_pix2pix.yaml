@@ -1,0 +1,17 @@
+training:
+  data_dir: "./data"
+  target_map: "roughness"  # or "metallic"
+  resolution: 512
+  batch_size: 8
+  epochs: 100
+  learning_rate: 0.0002
+  lambda_l1: 100  # Weight for L1 loss (higher = more faithful to target)
+  validation_epochs: 5
+
+checkpointing:
+  output_dir: "./output"
+  save_epochs: 10
+
+logging:
+  use_wandb: true
+  project_name: "pbr-pix2pix"
