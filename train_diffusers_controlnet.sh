@@ -29,23 +29,21 @@ git clone --depth 1 https://github.com/huggingface/diffusers.git
 # Install example requirements
 pip install -r diffusers/examples/controlnet/requirements_sdxl.txt --quiet 2>/dev/null || true
 
-# Prepare dataset (remove old format if exists)
+# Prepare dataset (creates HuggingFace Dataset with proper Image features)
 echo "Preparing dataset..."
 rm -rf "./data/kohya/$TARGET"
 python3 prepare_kohya_dataset.py --target $TARGET
-
-# Count samples
-SAMPLE_COUNT=$(ls data/kohya/$TARGET/train/images | wc -l)
-echo "Found $SAMPLE_COUNT samples"
 
 # Train
 echo ""
 echo "Starting training..."
 
+# Use --dataset_name with local path to load the saved Arrow dataset
+# This properly loads Image features for both image and conditioning_image
 accelerate launch diffusers/examples/controlnet/train_controlnet_sdxl.py \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-xl-base-1.0" \
     --output_dir="./output/controlnet-sdxl-$TARGET" \
-    --train_data_dir="./data/kohya/$TARGET/train" \
+    --dataset_name="./data/kohya/$TARGET/train" \
     --conditioning_image_column="conditioning_image" \
     --image_column="image" \
     --caption_column="text" \

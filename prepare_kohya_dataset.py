@@ -1,20 +1,16 @@
 """
 Prepare dataset in diffusers ControlNet format.
 
-Diffusers expects:
-    data/kohya/{target}/
-        train/
-            metadata.jsonl  (with: file_name, conditioning_image, text)
-            images/
-                0001.jpg
-            conditioning_images/
-                0001.jpg
+Creates a HuggingFace Dataset with proper Image features for both
+target images and conditioning images.
 """
 
 import argparse
 from pathlib import Path
-import shutil
 import json
+
+from datasets import Dataset, Features, Image, Value
+from PIL import Image as PILImage
 
 
 def prepare_diffusers_dataset(data_dir: str, target: str):
@@ -22,10 +18,7 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
 
     chained_dir = Path(data_dir) / "chained"
     output_dir = Path(data_dir) / "kohya" / target / "train"
-
-    # Create directories
-    (output_dir / "images").mkdir(parents=True, exist_ok=True)
-    (output_dir / "conditioning_images").mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load prompts
     prompts_file = chained_dir / "prompts.json"
@@ -45,23 +38,14 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
     print(f"Target: {target}")
     print(f"Output: {output_dir}")
 
-    metadata = []
-
+    # Build dataset records
+    records = []
     for i, bc_file in enumerate(files):
         filename = bc_file.name
         target_file = target_dir / filename
 
         if not target_file.exists():
             continue
-
-        # New filename
-        new_name = f"{i:05d}.jpg"
-
-        # Copy target image (what model should generate) -> images/
-        shutil.copy(target_file, output_dir / "images" / new_name)
-
-        # Copy conditioning image (basecolor input) -> conditioning_images/
-        shutil.copy(bc_file, output_dir / "conditioning_images" / new_name)
 
         # Get caption
         prompt_data = prompts.get(filename, {})
@@ -77,23 +61,39 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
         else:
             full_prompt = f"{target} map, {caption}, pbr texture"
 
-        metadata.append({
-            "file_name": f"images/{new_name}",
-            "conditioning_image": f"conditioning_images/{new_name}",
+        records.append({
+            "image": str(target_file.absolute()),
+            "conditioning_image": str(bc_file.absolute()),
             "text": full_prompt
         })
 
-    # Write metadata.jsonl
-    with open(output_dir / "metadata.jsonl", "w") as f:
-        for item in metadata:
-            f.write(json.dumps(item) + "\n")
+        if (i + 1) % 500 == 0:
+            print(f"  Prepared {i + 1}/{len(files)} records...")
 
-    print(f"\nDone! Created {len(metadata)} samples")
-    print(f"\nStructure:")
-    print(f"  {output_dir}/")
-    print(f"    metadata.jsonl")
-    print(f"    images/           - Target images")
-    print(f"    conditioning_images/ - Basecolor inputs")
+    print(f"\nCreating HuggingFace Dataset with {len(records)} samples...")
+
+    # Create dataset with proper features
+    features = Features({
+        "image": Image(),
+        "conditioning_image": Image(),
+        "text": Value("string")
+    })
+
+    dataset = Dataset.from_dict({
+        "image": [r["image"] for r in records],
+        "conditioning_image": [r["conditioning_image"] for r in records],
+        "text": [r["text"] for r in records],
+    }, features=features)
+
+    # Save to disk
+    dataset.save_to_disk(str(output_dir))
+
+    print(f"\nDone! Created dataset with {len(dataset)} samples")
+    print(f"Saved to: {output_dir}")
+    print(f"\nFeatures:")
+    print(f"  image: Image (target PBR map)")
+    print(f"  conditioning_image: Image (basecolor input)")
+    print(f"  text: string (prompt)")
 
 
 def main():
