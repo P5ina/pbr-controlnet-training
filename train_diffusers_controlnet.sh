@@ -35,7 +35,7 @@ rm -rf "./data/kohya/$TARGET"
 python3 prepare_kohya_dataset.py --target $TARGET
 
 # Count samples
-SAMPLE_COUNT=$(ls data/kohya/$TARGET/image | wc -l)
+SAMPLE_COUNT=$(ls data/kohya/$TARGET/train/images | wc -l)
 echo "Found $SAMPLE_COUNT samples"
 
 # Train
