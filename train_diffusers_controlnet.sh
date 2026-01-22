@@ -101,7 +101,7 @@ accelerate launch "$TRAIN_SCRIPT" \
     --learning_rate=1e-5 \
     --lr_scheduler="cosine" \
     --lr_warmup_steps=500 \
-    --mixed_precision="fp16" \
+    --mixed_precision="bf16" \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
     --gradient_checkpointing \
