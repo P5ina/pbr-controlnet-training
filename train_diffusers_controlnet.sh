@@ -47,7 +47,7 @@ accelerate launch diffusers/examples/controlnet/train_controlnet_sdxl.py \
     --output_dir="./output/controlnet-sdxl-$TARGET" \
     --train_data_dir="./data/kohya/$TARGET/train" \
     --conditioning_image_column="conditioning_image" \
-    --image_column="file_name" \
+    --image_column="image" \
     --caption_column="text" \
     --resolution=1024 \
     --train_batch_size=1 \
