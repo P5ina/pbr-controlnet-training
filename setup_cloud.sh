@@ -54,6 +54,7 @@ $PIP install -q \
     pillow \
     numpy \
     requests \
+    datasets \
     || $PIP install \
     torch \
     torchvision \
@@ -62,7 +63,8 @@ $PIP install -q \
     wandb \
     pillow \
     numpy \
-    requests
+    requests \
+    datasets
 
 echo -e "${GREEN}✓ Python dependencies installed${NC}"
 
@@ -117,7 +119,7 @@ if [ -d "data/materials/basecolor" ] && [ "$(ls -A data/materials/basecolor 2>/d
     echo "  Found $MATERIAL_COUNT materials"
 else
     echo ""
-    echo "No data found. You have 3 options:"
+    echo "No data found. You have 4 options:"
     echo ""
     echo "  1. Upload your own data to: data/materials/"
     echo "     Expected structure:"
@@ -128,9 +130,12 @@ else
     echo "       data/materials/height/*.jpg (optional)"
     echo ""
     echo "  2. Download from ambientCG (CC0 license):"
-    echo "     python prepare_multitask_data.py download --output data/materials --max 500"
+    echo "     ./download_data.sh 500"
     echo ""
-    echo "  3. Convert existing PBR dataset:"
+    echo "  3. Download from MatSynth (~4000 high-quality PBR materials):"
+    echo "     ./download_matsynth.sh 1000"
+    echo ""
+    echo "  4. Convert existing PBR dataset:"
     echo "     python prepare_multitask_data.py convert --input /path/to/materials --output data/materials"
     echo ""
 fi
@@ -174,7 +179,7 @@ python prepare_multitask_data.py validate --data data/materials
 VALIDATE_EOF
 chmod +x validate.sh
 
-# Download data script
+# Download data script (ambientCG)
 cat > download_data.sh << 'DOWNLOAD_EOF'
 #!/bin/bash
 MAX_MATERIALS=${1:-500}
@@ -183,6 +188,26 @@ python prepare_multitask_data.py download --output data/materials --max $MAX_MAT
 python prepare_multitask_data.py validate --data data/materials
 DOWNLOAD_EOF
 chmod +x download_data.sh
+
+# Download MatSynth data script
+cat > download_matsynth.sh << 'MATSYNTH_EOF'
+#!/bin/bash
+MAX_MATERIALS=${1:-1000}
+CC0_FLAG=""
+if [ "$2" == "--cc0" ]; then
+    CC0_FLAG="--cc0-only"
+    echo "Downloading up to $MAX_MATERIALS CC0-only materials from MatSynth..."
+else
+    echo "Downloading up to $MAX_MATERIALS materials from MatSynth..."
+fi
+
+# Install datasets library if not present
+pip install -q datasets
+
+python download_matsynth.py --output data/materials --max $MAX_MATERIALS --resolution 512 $CC0_FLAG
+python prepare_multitask_data.py validate --data data/materials
+MATSYNTH_EOF
+chmod +x download_matsynth.sh
 
 # Monitor script
 cat > monitor.sh << 'MONITOR_EOF'
