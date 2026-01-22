@@ -71,28 +71,17 @@ if target_line in content:
 else:
     print("Warning: Could not find target line for dataset patch")
 
-# Patch 2: Cast prompt_embeds to weight_dtype in training loop
-# Find where model_pred = unet( is called and ensure encoder_hidden_states is cast
-# The issue is prompt_embeds (from batch) needs to be cast to weight_dtype
+# Patch 2: Cast encoder_hidden_states to weight_dtype in UNet call
+# The prompt_ids (encoder_hidden_states) are float32 but UNet is fp16
+# Find encoder_hidden_states=batch["prompt_ids"] and add .to(weight_dtype)
 
-# Find the line that gets prompt_embeds from batch and add .to(weight_dtype)
-old_line = 'prompt_embeds = batch["prompt_embeds"].to(dtype=weight_dtype)'
-if old_line not in content:
-    # Try to find the original line without dtype casting
-    original = 'prompt_embeds = batch["prompt_embeds"]'
-    if original in content:
-        content = content.replace(original, old_line)
-        print("Prompt embeds dtype patch applied")
-    else:
-        print("Warning: Could not find prompt_embeds line")
-
-# Also cast pooled_prompt_embeds
-old_pooled = 'pooled_prompt_embeds = batch["pooled_prompt_embeds"].to(dtype=weight_dtype)'
-if old_pooled not in content:
-    original_pooled = 'pooled_prompt_embeds = batch["pooled_prompt_embeds"]'
-    if original_pooled in content:
-        content = content.replace(original_pooled, old_pooled)
-        print("Pooled prompt embeds dtype patch applied")
+old_encoder = 'encoder_hidden_states=batch["prompt_ids"],'
+new_encoder = 'encoder_hidden_states=batch["prompt_ids"].to(dtype=weight_dtype),'
+if old_encoder in content:
+    content = content.replace(old_encoder, new_encoder)
+    print("encoder_hidden_states dtype patch applied")
+else:
+    print("Warning: Could not find encoder_hidden_states line")
 
 with open("diffusers/examples/controlnet/train_controlnet_sdxl.py", "w") as f:
     f.write(content)
