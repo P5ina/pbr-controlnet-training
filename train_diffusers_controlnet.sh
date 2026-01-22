@@ -104,7 +104,6 @@ accelerate launch "$TRAIN_SCRIPT" \
     --mixed_precision="bf16" \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
-    --gradient_checkpointing \
     --tracker_project_name="pbr-controlnet-sdxl"
 
 echo ""
