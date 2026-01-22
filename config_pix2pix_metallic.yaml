@@ -2,15 +2,15 @@ training:
   data_dir: "./data"
   target_map: "metallic"
   resolution: 512
-  batch_size: 8
-  epochs: 100
+  batch_size: 4
+  epochs: 200
   learning_rate: 0.0002
   lambda_l1: 100
-  validation_epochs: 5
+  validation_epochs: 10
 
 checkpointing:
   output_dir: "./output"
-  save_epochs: 10
+  save_epochs: 20
 
 logging:
   use_wandb: true
