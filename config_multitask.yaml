@@ -1,0 +1,30 @@
+# Multi-task PBR Generator Training Configuration
+
+model:
+  pretrained: true                    # Use pretrained EfficientNet encoder
+  freeze_encoder_epochs: 5            # Freeze encoder for first N epochs (warmup)
+
+training:
+  data_dir: "./data/materials"        # Directory containing basecolor/, normal/, roughness/, metallic/, height/
+  resolution: 512                     # Training resolution
+  batch_size: 8                       # Batch size (reduce if OOM)
+  epochs: 100                         # Total epochs
+  learning_rate: 0.0001               # Initial learning rate
+  weight_decay: 0.01                  # AdamW weight decay
+  num_workers: 4                      # DataLoader workers
+  augment: true                       # Enable data augmentation
+  validation_epochs: 5                # Validate every N epochs
+
+  # Loss weights (tune these based on results)
+  lambda_l1: 1.0                      # L1 reconstruction loss
+  lambda_perceptual: 0.1              # VGG perceptual loss
+  lambda_ssim: 0.5                    # SSIM structural loss
+  lambda_gradient: 0.5                # Gradient/edge loss
+
+checkpointing:
+  output_dir: "./output/multitask"    # Output directory
+  save_epochs: 10                     # Save checkpoint every N epochs
+
+logging:
+  use_wandb: true                     # Log to Weights & Biases
+  project_name: "pbr-multitask"       # W&B project name
