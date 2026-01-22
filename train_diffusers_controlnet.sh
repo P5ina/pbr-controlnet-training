@@ -125,6 +125,7 @@ accelerate launch "$TRAIN_SCRIPT" \
     --validation_steps=500 \
     --use_8bit_adam \
     --gradient_checkpointing \
+    --report_to=wandb \
     --tracker_project_name="pbr-controlnet-sdxl"
 
 echo ""
