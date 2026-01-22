@@ -107,7 +107,7 @@ accelerate launch "$TRAIN_SCRIPT" \
     --conditioning_image_column="conditioning_image" \
     --image_column="image" \
     --caption_column="text" \
-    --resolution=1024 \
+    --resolution=512 \
     --train_batch_size=1 \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=20 \
