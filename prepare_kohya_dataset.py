@@ -1,24 +1,80 @@
 """
 Prepare dataset in diffusers ControlNet format.
 
-Creates a HuggingFace Dataset with proper Image features for both
-target images and conditioning images.
+Creates a dataset directory with:
+- metadata.jsonl
+- images/ (target PBR maps)
+- conditioning_images/ (basecolor inputs)
+- pbr_controlnet.py (custom loader script)
 """
 
 import argparse
 from pathlib import Path
+import shutil
 import json
 
-from datasets import Dataset, Features, Image, Value
-from PIL import Image as PILImage
+
+LOADER_SCRIPT = '''"""Custom dataset loader for PBR ControlNet training."""
+import os
+import json
+import datasets
+
+_FEATURES = datasets.Features({
+    "image": datasets.Image(),
+    "conditioning_image": datasets.Image(),
+    "text": datasets.Value("string"),
+})
+
+
+class PBRControlNetDataset(datasets.GeneratorBasedBuilder):
+    """PBR ControlNet dataset with conditioning images."""
+
+    BUILDER_CONFIGS = [datasets.BuilderConfig(name="default", version=datasets.Version("1.0.0"))]
+    DEFAULT_CONFIG_NAME = "default"
+
+    def _info(self):
+        return datasets.DatasetInfo(
+            features=_FEATURES,
+            supervised_keys=("conditioning_image", "text"),
+        )
+
+    def _split_generators(self, dl_manager):
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        return [
+            datasets.SplitGenerator(
+                name=datasets.Split.TRAIN,
+                gen_kwargs={
+                    "metadata_path": os.path.join(base_path, "metadata.jsonl"),
+                    "images_dir": os.path.join(base_path, "images"),
+                    "conditioning_dir": os.path.join(base_path, "conditioning_images"),
+                },
+            ),
+        ]
+
+    def _generate_examples(self, metadata_path, images_dir, conditioning_dir):
+        with open(metadata_path, "r") as f:
+            for idx, line in enumerate(f):
+                row = json.loads(line)
+                image_path = os.path.join(images_dir, row["image"])
+                cond_path = os.path.join(conditioning_dir, row["conditioning_image"])
+
+                yield idx, {
+                    "image": image_path,
+                    "conditioning_image": cond_path,
+                    "text": row["text"],
+                }
+'''
 
 
 def prepare_diffusers_dataset(data_dir: str, target: str):
     """Convert chained dataset to diffusers ControlNet format."""
 
     chained_dir = Path(data_dir) / "chained"
-    output_dir = Path(data_dir) / "kohya" / target / "train"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(data_dir) / "kohya" / target
+
+    # Create directories
+    (output_dir / "images").mkdir(parents=True, exist_ok=True)
+    (output_dir / "conditioning_images").mkdir(parents=True, exist_ok=True)
 
     # Load prompts
     prompts_file = chained_dir / "prompts.json"
@@ -38,14 +94,23 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
     print(f"Target: {target}")
     print(f"Output: {output_dir}")
 
-    # Build dataset records
-    records = []
+    metadata = []
+
     for i, bc_file in enumerate(files):
         filename = bc_file.name
         target_file = target_dir / filename
 
         if not target_file.exists():
             continue
+
+        # New filename
+        new_name = f"{i:05d}.jpg"
+
+        # Copy target image (what model should generate) -> images/
+        shutil.copy(target_file, output_dir / "images" / new_name)
+
+        # Copy conditioning image (basecolor input) -> conditioning_images/
+        shutil.copy(bc_file, output_dir / "conditioning_images" / new_name)
 
         # Get caption
         prompt_data = prompts.get(filename, {})
@@ -61,39 +126,31 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
         else:
             full_prompt = f"{target} map, {caption}, pbr texture"
 
-        records.append({
-            "image": str(target_file.absolute()),
-            "conditioning_image": str(bc_file.absolute()),
+        metadata.append({
+            "image": new_name,
+            "conditioning_image": new_name,
             "text": full_prompt
         })
 
         if (i + 1) % 500 == 0:
-            print(f"  Prepared {i + 1}/{len(files)} records...")
+            print(f"  Copied {i + 1}/{len(files)} files...")
 
-    print(f"\nCreating HuggingFace Dataset with {len(records)} samples...")
+    # Write metadata.jsonl
+    with open(output_dir / "metadata.jsonl", "w") as f:
+        for item in metadata:
+            f.write(json.dumps(item) + "\n")
 
-    # Create dataset with proper features
-    features = Features({
-        "image": Image(),
-        "conditioning_image": Image(),
-        "text": Value("string")
-    })
+    # Write custom loader script (must match directory name for HuggingFace to find it)
+    with open(output_dir / f"{target}.py", "w") as f:
+        f.write(LOADER_SCRIPT)
 
-    dataset = Dataset.from_dict({
-        "image": [r["image"] for r in records],
-        "conditioning_image": [r["conditioning_image"] for r in records],
-        "text": [r["text"] for r in records],
-    }, features=features)
-
-    # Save to disk
-    dataset.save_to_disk(str(output_dir))
-
-    print(f"\nDone! Created dataset with {len(dataset)} samples")
-    print(f"Saved to: {output_dir}")
-    print(f"\nFeatures:")
-    print(f"  image: Image (target PBR map)")
-    print(f"  conditioning_image: Image (basecolor input)")
-    print(f"  text: string (prompt)")
+    print(f"\nDone! Created {len(metadata)} samples")
+    print(f"\nStructure:")
+    print(f"  {output_dir}/")
+    print(f"    metadata.jsonl")
+    print(f"    {target}.py        - Custom loader script")
+    print(f"    images/            - Target images ({target} maps)")
+    print(f"    conditioning_images/ - Basecolor inputs")
 
 
 def main():
