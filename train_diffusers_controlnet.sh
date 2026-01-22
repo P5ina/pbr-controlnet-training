@@ -11,14 +11,19 @@ echo "SDXL ControlNet Training (diffusers)"
 echo "Target: $TARGET"
 echo "======================================"
 
-# Install dependencies
-pip install accelerate transformers diffusers peft datasets --quiet
+# Install dependencies (diffusers from source for latest examples)
+pip install accelerate transformers peft datasets --quiet
+pip install git+https://github.com/huggingface/diffusers.git --quiet
 
 # Clone diffusers examples if needed
 if [ ! -d "diffusers" ]; then
     echo "Cloning diffusers..."
     git clone https://github.com/huggingface/diffusers.git
 fi
+
+# Disable version check (examples may require dev version)
+sed -i 's/^from diffusers.utils import check_min_version/# &/' diffusers/examples/controlnet/train_controlnet_sdxl.py 2>/dev/null || true
+sed -i 's/^check_min_version/# &/' diffusers/examples/controlnet/train_controlnet_sdxl.py 2>/dev/null || true
 
 # Prepare dataset
 echo "Preparing dataset..."
