@@ -1,0 +1,32 @@
+# Chained Pix2Pix Training Configuration
+# CHORD-style sequential PBR generation:
+#   Stage 1: basecolor → normal
+#   Stage 2: basecolor + normal → roughness
+#   Stage 3: basecolor + normal + roughness → metallic
+
+training:
+  data_dir: "./data"
+  resolution: 512
+  batch_size: 4  # Reduced due to larger conditioning inputs
+  epochs: 100
+  learning_rate: 0.0002
+  lambda_l1: 100
+  validation_epochs: 10
+
+  # Chaining options
+  use_generated_conditioning: true  # Use generated maps from previous stages
+                                     # If false, uses ground truth for conditioning
+                                     # Set to true for realistic inference simulation
+
+checkpointing:
+  output_dir: "./output"
+  save_epochs: 20
+
+logging:
+  use_wandb: true
+  project_name: "pbr-pix2pix-chained"
+
+# Memory optimization for different GPUs
+# RTX 4090 (24GB): batch_size=4
+# RTX 3090 (24GB): batch_size=2
+# 16GB VRAM: batch_size=1, resolution=512
