@@ -57,7 +57,7 @@ def prepare_chained_dataset(
 
     for idx in range(total_samples):
         sample = dataset[idx]
-        filename = f"{idx:05d}.png"
+        filename = f"{idx:05d}.jpg"
 
         # Skip if already exists
         if (output_path / "basecolor" / filename).exists():
@@ -88,10 +88,10 @@ def prepare_chained_dataset(
                 if not is_mostly_black(metallic):
                     metallic_count += 1
 
-            basecolor.save(output_path / "basecolor" / filename, "PNG", compress_level=0)
-            normal.save(output_path / "normal" / filename, "PNG", compress_level=0)
-            roughness.save(output_path / "roughness" / filename, "PNG", compress_level=0)
-            metallic.save(output_path / "metallic" / filename, "PNG", compress_level=0)
+            basecolor.save(output_path / "basecolor" / filename, "JPEG", quality=95)
+            normal.save(output_path / "normal" / filename, "JPEG", quality=95)
+            roughness.save(output_path / "roughness" / filename, "JPEG", quality=95)
+            metallic.save(output_path / "metallic" / filename, "JPEG", quality=95)
 
             # Caption
             metadata = sample.get("metadata", {}) or {}

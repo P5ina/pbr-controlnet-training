@@ -157,7 +157,7 @@ class ChainedPBRDataset(Dataset):
         self.roughness_dir = self.data_dir / "roughness"
         self.metallic_dir = self.data_dir / "metallic"
 
-        self.files = sorted(list(self.basecolor_dir.glob("*.png")))
+        self.files = sorted(list(self.basecolor_dir.glob("*.jpg")) or list(self.basecolor_dir.glob("*.png")))
         print(f"Found {len(self.files)} samples")
 
     def __len__(self):
