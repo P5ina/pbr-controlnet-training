@@ -18,9 +18,18 @@ from queue import Queue
 from threading import Thread
 import io
 
+import numpy as np
 from datasets import load_dataset
 from PIL import Image
 from tqdm import tqdm
+
+
+def is_mostly_black(img: Image.Image, threshold: float = 0.05) -> bool:
+    """Check if image is mostly black (mean brightness < threshold)."""
+    if img is None:
+        return True
+    arr = np.array(img.convert("L")).astype(float) / 255.0
+    return arr.mean() < threshold
 
 
 def process_image(img, target_size: int = 512) -> Image.Image:
@@ -42,7 +51,7 @@ def save_image_fast(img: Image.Image, path: Path):
     img.save(path, "PNG", compress_level=1)  # Faster compression
 
 
-def process_and_save(item, cond_path, target_path, target_map, resolution):
+def process_and_save(item, cond_path, target_path, target_map, resolution, filter_empty=False):
     """Process a single sample and save images."""
     idx, sample, processed_idx = item
 
@@ -59,12 +68,18 @@ def process_and_save(item, cond_path, target_path, target_map, resolution):
 
         # Get target map (roughness or metallic)
         target_img = None
+        raw_target = None
         for key in [target_map, f"{target_map}_map"]:
             if key in sample and sample[key] is not None:
+                raw_target = sample[key]
                 target_img = process_image(sample[key], resolution)
                 break
 
         if target_img is None:
+            return None
+
+        # Filter out mostly black images (for metallic)
+        if filter_empty and is_mostly_black(raw_target):
             return None
 
         # Generate filename
@@ -108,6 +123,7 @@ def prepare_controlnet_dataset(
     max_samples: int = None,
     resolution: int = 512,
     num_workers: int = 8,
+    filter_empty: bool = False,
 ):
     """
     Prepare dataset for ControlNet training with parallel processing.
@@ -123,6 +139,8 @@ def prepare_controlnet_dataset(
     print(f"Target map: {target_map}")
     print(f"Resolution: {resolution}x{resolution}")
     print(f"Workers: {num_workers}")
+    if filter_empty:
+        print(f"Filtering: skipping mostly-black target maps")
 
     # Download full dataset (faster with good internet)
     dataset = load_dataset(
@@ -155,7 +173,7 @@ def prepare_controlnet_dataset(
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = {
                     executor.submit(
-                        process_and_save, item, cond_path, target_path, target_map, resolution
+                        process_and_save, item, cond_path, target_path, target_map, resolution, filter_empty
                     ): item for item in batch
                 }
 
@@ -224,19 +242,23 @@ def main():
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--all", action="store_true",
                         help="Prepare both roughness and metallic datasets")
+    parser.add_argument("--filter-empty", action="store_true",
+                        help="Filter out samples with mostly-black target maps (useful for metallic)")
 
     args = parser.parse_args()
 
     if args.all:
         for target in ["roughness", "metallic"]:
+            # Auto-enable filter for metallic
+            filter_empty = args.filter_empty or (target == "metallic")
             prepare_controlnet_dataset(
                 args.output, target, args.split, args.max_samples,
-                args.resolution, args.num_workers
+                args.resolution, args.num_workers, filter_empty
             )
     else:
         prepare_controlnet_dataset(
             args.output, args.target, args.split, args.max_samples,
-            args.resolution, args.num_workers
+            args.resolution, args.num_workers, args.filter_empty
         )
 
 
