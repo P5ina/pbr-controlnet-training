@@ -59,7 +59,6 @@ accelerate launch diffusers/examples/controlnet/train_controlnet_sdxl.py \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
     --gradient_checkpointing \
-    --enable_xformers_memory_efficient_attention \
     --tracker_project_name="pbr-controlnet-sdxl"
 
 echo ""
