@@ -20,7 +20,7 @@ import os
 import argparse
 from pathlib import Path
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from queue import Queue
 from threading import Thread
 import time
@@ -45,7 +45,7 @@ def process_image(img, target_size: int = 512) -> Image.Image:
         return None
 
     if img.width != target_size or img.height != target_size:
-        img = img.resize((target_size, target_size), Image.LANCZOS)
+        img = img.resize((target_size, target_size), Image.BILINEAR)  # Faster than LANCZOS
 
     if img.mode != "RGB":
         img = img.convert("RGB")
@@ -55,7 +55,7 @@ def process_image(img, target_size: int = 512) -> Image.Image:
 
 def save_image_fast(img: Image.Image, path: Path):
     """Save image with optimized settings."""
-    img.save(path, "PNG", compress_level=1)
+    img.save(path, "PNG", compress_level=0)  # No compression = fastest
 
 
 def get_map_from_sample(sample, map_name: str, resolution: int):
@@ -202,10 +202,10 @@ def prepare_chained_dataset(
     # Use a single ThreadPoolExecutor for all processing
     pbar = tqdm(total=total_samples, unit="mat", smoothing=0.1)
 
-    batch_size = num_workers * 4
+    batch_size = num_workers * 8  # Larger batches for better CPU utilization
     batch = []
 
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
         for idx, sample in enumerate(dataset):
             if idx >= total_samples:
                 break
