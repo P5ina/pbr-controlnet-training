@@ -96,9 +96,15 @@ python3 prepare_kohya_dataset.py --target $TARGET
 SAMPLE_COUNT=$(ls ./data/kohya/$TARGET/images 2>/dev/null | wc -l)
 echo "Found $SAMPLE_COUNT samples"
 
+# Install 8-bit adam
+pip install bitsandbytes --quiet
+
 # Train
 echo ""
 echo "Starting training..."
+
+# Help with memory fragmentation
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 accelerate launch "$TRAIN_SCRIPT" \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-xl-base-1.0" \
@@ -117,6 +123,8 @@ accelerate launch "$TRAIN_SCRIPT" \
     --mixed_precision="fp16" \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
+    --use_8bit_adam \
+    --gradient_checkpointing \
     --tracker_project_name="pbr-controlnet-sdxl"
 
 echo ""
