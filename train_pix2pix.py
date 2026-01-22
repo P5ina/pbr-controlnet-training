@@ -319,6 +319,7 @@ def train(config):
 
 def validate(generator, dataset, config, epoch, device):
     """Generate validation images."""
+    import random
     generator.eval()
 
     target_map = config["training"]["target_map"]
@@ -327,11 +328,15 @@ def validate(generator, dataset, config, epoch, device):
     output_dir = Path(config["checkpointing"]["output_dir"]) / "validation" / f"epoch_{epoch}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Take first 4 samples
+    # Take 4 random samples (fixed seed for reproducibility across epochs)
+    random.seed(42)
+    num_samples = min(4, len(dataset))
+    indices = random.sample(range(len(dataset)), num_samples)
+
     all_rows = []
 
     with torch.no_grad():
-        for i in range(min(4, len(dataset))):
+        for i in indices:
             sample = dataset[i]
             cond = sample["conditioning"].unsqueeze(0).to(device)
             target = sample["target"]
