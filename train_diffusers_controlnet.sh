@@ -29,8 +29,9 @@ git clone --depth 1 https://github.com/huggingface/diffusers.git
 # Install example requirements
 pip install -r diffusers/examples/controlnet/requirements_sdxl.txt --quiet 2>/dev/null || true
 
-# Prepare dataset
+# Prepare dataset (remove old format if exists)
 echo "Preparing dataset..."
+rm -rf "./data/kohya/$TARGET"
 python3 prepare_kohya_dataset.py --target $TARGET
 
 # Count samples
@@ -44,9 +45,9 @@ echo "Starting training..."
 accelerate launch diffusers/examples/controlnet/train_controlnet_sdxl.py \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-xl-base-1.0" \
     --output_dir="./output/controlnet-sdxl-$TARGET" \
-    --train_data_dir="./data/kohya/$TARGET" \
-    --conditioning_image_column="conditioning" \
-    --image_column="image" \
+    --train_data_dir="./data/kohya/$TARGET/train" \
+    --conditioning_image_column="conditioning_image" \
+    --image_column="file_name" \
     --caption_column="text" \
     --resolution=1024 \
     --train_batch_size=1 \

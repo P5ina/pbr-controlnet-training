@@ -1,19 +1,14 @@
 """
-Prepare dataset in kohya-ss format for ControlNet training.
+Prepare dataset in diffusers ControlNet format.
 
-Kohya format:
+Diffusers expects:
     data/kohya/{target}/
-        image/
-            0001.jpg  (target image - what we want to generate)
-            0002.jpg
-            ...
-        conditioning/
-            0001.jpg  (conditioning image - basecolor)
-            0002.jpg
-            ...
-        0001.txt  (caption for 0001.jpg)
-        0002.txt
-        ...
+        train/
+            metadata.jsonl  (with: file_name, conditioning_image, text)
+            images/
+                0001.jpg
+            conditioning_images/
+                0001.jpg
 """
 
 import argparse
@@ -22,15 +17,15 @@ import shutil
 import json
 
 
-def prepare_kohya_dataset(data_dir: str, target: str):
-    """Convert chained dataset to kohya format."""
+def prepare_diffusers_dataset(data_dir: str, target: str):
+    """Convert chained dataset to diffusers ControlNet format."""
 
     chained_dir = Path(data_dir) / "chained"
-    kohya_dir = Path(data_dir) / "kohya" / target
+    output_dir = Path(data_dir) / "kohya" / target / "train"
 
     # Create directories
-    (kohya_dir / "image").mkdir(parents=True, exist_ok=True)
-    (kohya_dir / "conditioning").mkdir(parents=True, exist_ok=True)
+    (output_dir / "images").mkdir(parents=True, exist_ok=True)
+    (output_dir / "conditioning_images").mkdir(parents=True, exist_ok=True)
 
     # Load prompts
     prompts_file = chained_dir / "prompts.json"
@@ -46,29 +41,29 @@ def prepare_kohya_dataset(data_dir: str, target: str):
 
     files = sorted([f for f in basecolor_dir.iterdir() if f.suffix in ['.jpg', '.png']])
 
-    print(f"Converting {len(files)} samples to kohya format...")
+    print(f"Converting {len(files)} samples to diffusers format...")
     print(f"Target: {target}")
-    print(f"Output: {kohya_dir}")
+    print(f"Output: {output_dir}")
+
+    metadata = []
 
     for i, bc_file in enumerate(files):
         filename = bc_file.name
-        stem = bc_file.stem
-
         target_file = target_dir / filename
 
         if not target_file.exists():
             continue
 
-        # New filename with index for kohya (simpler naming)
+        # New filename
         new_name = f"{i:05d}.jpg"
 
-        # Copy target image (what model should generate)
-        shutil.copy(target_file, kohya_dir / "image" / new_name)
+        # Copy target image (what model should generate) -> images/
+        shutil.copy(target_file, output_dir / "images" / new_name)
 
-        # Copy conditioning image (basecolor input)
-        shutil.copy(bc_file, kohya_dir / "conditioning" / new_name)
+        # Copy conditioning image (basecolor input) -> conditioning_images/
+        shutil.copy(bc_file, output_dir / "conditioning_images" / new_name)
 
-        # Create caption file
+        # Get caption
         prompt_data = prompts.get(filename, {})
         caption = prompt_data.get("caption", "material texture")
 
@@ -82,16 +77,23 @@ def prepare_kohya_dataset(data_dir: str, target: str):
         else:
             full_prompt = f"{target} map, {caption}, pbr texture"
 
-        caption_file = kohya_dir / f"{i:05d}.txt"
-        with open(caption_file, "w") as f:
-            f.write(full_prompt)
+        metadata.append({
+            "file_name": f"images/{new_name}",
+            "conditioning_image": f"conditioning_images/{new_name}",
+            "text": full_prompt
+        })
 
-    print(f"\nDone! Created {len(files)} samples")
+    # Write metadata.jsonl
+    with open(output_dir / "metadata.jsonl", "w") as f:
+        for item in metadata:
+            f.write(json.dumps(item) + "\n")
+
+    print(f"\nDone! Created {len(metadata)} samples")
     print(f"\nStructure:")
-    print(f"  {kohya_dir}/")
-    print(f"    image/           - Target images (what model generates)")
-    print(f"    conditioning/    - Input images (basecolor)")
-    print(f"    *.txt           - Captions")
+    print(f"  {output_dir}/")
+    print(f"    metadata.jsonl")
+    print(f"    images/           - Target images")
+    print(f"    conditioning_images/ - Basecolor inputs")
 
 
 def main():
@@ -101,7 +103,7 @@ def main():
                         choices=["normal", "roughness", "metallic"])
     args = parser.parse_args()
 
-    prepare_kohya_dataset(args.data_dir, args.target)
+    prepare_diffusers_dataset(args.data_dir, args.target)
 
 
 if __name__ == "__main__":
