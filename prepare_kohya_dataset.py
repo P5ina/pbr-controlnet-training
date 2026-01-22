@@ -1,11 +1,13 @@
 """
-Prepare dataset in diffusers ControlNet format.
+Prepare dataset in diffusers ControlNet imagefolder format.
 
 Creates a dataset directory with:
-- metadata.jsonl
+- metadata.jsonl (with image, conditioning_image paths, and text)
 - images/ (target PBR maps)
 - conditioning_images/ (basecolor inputs)
-- pbr_controlnet.py (custom loader script)
+
+The diffusers training script is patched to cast conditioning_image
+from string paths to actual Image features after loading.
 """
 
 import argparse
@@ -14,60 +16,8 @@ import shutil
 import json
 
 
-LOADER_SCRIPT = '''"""Custom dataset loader for PBR ControlNet training."""
-import os
-import json
-import datasets
-
-_FEATURES = datasets.Features({
-    "image": datasets.Image(),
-    "conditioning_image": datasets.Image(),
-    "text": datasets.Value("string"),
-})
-
-
-class PBRControlNetDataset(datasets.GeneratorBasedBuilder):
-    """PBR ControlNet dataset with conditioning images."""
-
-    BUILDER_CONFIGS = [datasets.BuilderConfig(name="default", version=datasets.Version("1.0.0"))]
-    DEFAULT_CONFIG_NAME = "default"
-
-    def _info(self):
-        return datasets.DatasetInfo(
-            features=_FEATURES,
-            supervised_keys=("conditioning_image", "text"),
-        )
-
-    def _split_generators(self, dl_manager):
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        return [
-            datasets.SplitGenerator(
-                name=datasets.Split.TRAIN,
-                gen_kwargs={
-                    "metadata_path": os.path.join(base_path, "metadata.jsonl"),
-                    "images_dir": os.path.join(base_path, "images"),
-                    "conditioning_dir": os.path.join(base_path, "conditioning_images"),
-                },
-            ),
-        ]
-
-    def _generate_examples(self, metadata_path, images_dir, conditioning_dir):
-        with open(metadata_path, "r") as f:
-            for idx, line in enumerate(f):
-                row = json.loads(line)
-                image_path = os.path.join(images_dir, row["image"])
-                cond_path = os.path.join(conditioning_dir, row["conditioning_image"])
-
-                yield idx, {
-                    "image": image_path,
-                    "conditioning_image": cond_path,
-                    "text": row["text"],
-                }
-'''
-
-
 def prepare_diffusers_dataset(data_dir: str, target: str):
-    """Convert chained dataset to diffusers ControlNet format."""
+    """Convert chained dataset to diffusers ControlNet imagefolder format."""
 
     chained_dir = Path(data_dir) / "chained"
     output_dir = Path(data_dir) / "kohya" / target
@@ -90,7 +40,7 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
 
     files = sorted([f for f in basecolor_dir.iterdir() if f.suffix in ['.jpg', '.png']])
 
-    print(f"Converting {len(files)} samples to diffusers format...")
+    print(f"Converting {len(files)} samples to diffusers imagefolder format...")
     print(f"Target: {target}")
     print(f"Output: {output_dir}")
 
@@ -126,9 +76,14 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
         else:
             full_prompt = f"{target} map, {caption}, pbr texture"
 
+        # For imagefolder format:
+        # - file_name -> loaded as 'image' column (auto-converted to Image)
+        # - conditioning_image -> absolute path (cast_column needs full paths)
+        # - text -> caption
+        cond_image_path = (output_dir / "conditioning_images" / new_name).absolute()
         metadata.append({
-            "image": new_name,
-            "conditioning_image": new_name,
+            "file_name": f"images/{new_name}",
+            "conditioning_image": str(cond_image_path),
             "text": full_prompt
         })
 
@@ -140,17 +95,12 @@ def prepare_diffusers_dataset(data_dir: str, target: str):
         for item in metadata:
             f.write(json.dumps(item) + "\n")
 
-    # Write custom loader script (must match directory name for HuggingFace to find it)
-    with open(output_dir / f"{target}.py", "w") as f:
-        f.write(LOADER_SCRIPT)
-
     print(f"\nDone! Created {len(metadata)} samples")
     print(f"\nStructure:")
     print(f"  {output_dir}/")
-    print(f"    metadata.jsonl")
-    print(f"    {target}.py        - Custom loader script")
-    print(f"    images/            - Target images ({target} maps)")
-    print(f"    conditioning_images/ - Basecolor inputs")
+    print(f"    metadata.jsonl          - Links images with captions")
+    print(f"    images/                 - Target images ({target} maps)")
+    print(f"    conditioning_images/    - Basecolor inputs")
 
 
 def main():

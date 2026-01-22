@@ -29,7 +29,52 @@ git clone --depth 1 https://github.com/huggingface/diffusers.git
 # Install example requirements
 pip install -r diffusers/examples/controlnet/requirements_sdxl.txt --quiet 2>/dev/null || true
 
-# Prepare dataset with custom loader script
+# Patch the training script to cast conditioning_image column to Image after loading
+# This is needed because imagefolder only auto-converts the main image column
+echo "Patching diffusers training script..."
+TRAIN_SCRIPT="diffusers/examples/controlnet/train_controlnet_sdxl.py"
+
+# Add import for Image feature at the top
+sed -i 's/from datasets import load_dataset/from datasets import load_dataset, Image as ImageFeature/' "$TRAIN_SCRIPT"
+
+# Add cast_column after dataset loading - find the line after load_dataset and add casting
+# The pattern: after "dataset = load_dataset(" block ends with ")", add the cast
+python3 << 'PATCH_EOF'
+import re
+
+with open("diffusers/examples/controlnet/train_controlnet_sdxl.py", "r") as f:
+    content = f.read()
+
+# Find the get_train_dataset function and add column casting after dataset loading
+# We need to add this after the dataset is loaded but before it's used
+
+# Pattern to find where dataset["train"] is first accessed after loading
+# Add casting right after the dataset is loaded
+
+patch_code = '''
+    # Cast conditioning_image column to Image if it's a string path
+    # This is needed for local datasets using imagefolder format
+    if "train" in dataset:
+        _cond_col = args.conditioning_image_column or "conditioning_image"
+        if _cond_col in dataset["train"].column_names:
+            _first_item = dataset["train"][0][_cond_col]
+            if isinstance(_first_item, str):
+                logger.info(f"Casting {_cond_col} column to Image feature")
+                dataset["train"] = dataset["train"].cast_column(_cond_col, ImageFeature())
+'''
+
+# Find the line "column_names = dataset["train"].column_names" and insert before it
+target_line = 'column_names = dataset["train"].column_names'
+if target_line in content:
+    content = content.replace(target_line, patch_code + "\n    " + target_line)
+    with open("diffusers/examples/controlnet/train_controlnet_sdxl.py", "w") as f:
+        f.write(content)
+    print("Patch applied successfully")
+else:
+    print("Warning: Could not find target line to patch")
+PATCH_EOF
+
+# Prepare dataset (imagefolder format with metadata.jsonl)
 echo "Preparing dataset..."
 rm -rf "./data/kohya/$TARGET"
 python3 prepare_kohya_dataset.py --target $TARGET
@@ -42,10 +87,7 @@ echo "Found $SAMPLE_COUNT samples"
 echo ""
 echo "Starting training..."
 
-# Enable trust_remote_code for custom dataset loader
-export HF_DATASETS_TRUST_REMOTE_CODE=1
-
-accelerate launch diffusers/examples/controlnet/train_controlnet_sdxl.py \
+accelerate launch "$TRAIN_SCRIPT" \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-xl-base-1.0" \
     --output_dir="./output/controlnet-sdxl-$TARGET" \
     --dataset_name="./data/kohya/$TARGET" \
