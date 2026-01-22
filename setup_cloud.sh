@@ -42,9 +42,19 @@ echo -e "${GREEN}✓ System packages installed${NC}"
 # =============================================================================
 echo -e "\n${YELLOW}[2/6] Installing Python dependencies...${NC}"
 
-$PIP install --upgrade pip -q
+# Skip pip upgrade (causes issues on some systems)
+# $PIP install --upgrade pip -q
 
 $PIP install -q \
+    torch \
+    torchvision \
+    tqdm \
+    pyyaml \
+    wandb \
+    pillow \
+    numpy \
+    requests \
+    || $PIP install \
     torch \
     torchvision \
     tqdm \
