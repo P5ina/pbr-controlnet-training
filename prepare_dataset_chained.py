@@ -11,6 +11,9 @@ This enables chained training where each stage uses previous outputs as conditio
 
 Usage:
     python prepare_dataset_chained.py --output ./data --max-samples 4000
+
+Resume from interruption:
+    python prepare_dataset_chained.py --output ./data --max-samples 4000 --resume
 """
 
 import os
@@ -18,6 +21,9 @@ import argparse
 from pathlib import Path
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
+from threading import Thread
+import time
 
 import numpy as np
 from datasets import load_dataset
@@ -62,11 +68,41 @@ def get_map_from_sample(sample, map_name: str, resolution: int):
     return None
 
 
-def process_sample(item, output_path: Path, resolution: int):
+def process_sample(args):
     """Process a single sample and save ALL maps."""
-    idx, sample, processed_idx = item
+    idx, sample, processed_idx, output_path, resolution = args
 
     try:
+        filename = f"{processed_idx:05d}.png"
+
+        # Check if already processed (for resume)
+        if (output_path / "basecolor" / filename).exists():
+            # Already done, get metadata
+            metadata = sample.get("metadata", {}) or {}
+            material_name = str(sample.get("name", f"material_{idx}"))
+            category = str(sample.get("category", "unknown"))
+
+            if isinstance(metadata, dict):
+                description = metadata.get("description", "")
+                tags = metadata.get("tags", [])
+            else:
+                description = ""
+                tags = []
+
+            if description:
+                caption = description
+            elif tags and isinstance(tags, list):
+                caption = ", ".join(tags)
+            else:
+                caption = f"{material_name}, {category}"
+
+            return {
+                "filename": filename,
+                "caption": caption,
+                "is_metallic": False,  # Unknown for skipped
+                "skipped": True,
+            }
+
         # Get basecolor (required)
         basecolor = get_map_from_sample(sample, "basecolor", resolution)
         if basecolor is None:
@@ -87,11 +123,7 @@ def process_sample(item, output_path: Path, resolution: int):
         # Get metallic (optional - can be mostly black)
         metallic = get_map_from_sample(sample, "metallic", resolution)
         if metallic is None:
-            # Create black metallic map for non-metallic materials
             metallic = Image.new("RGB", (resolution, resolution), (0, 0, 0))
-
-        # Generate filename
-        filename = f"{processed_idx:05d}.png"
 
         # Save all maps
         save_image_fast(basecolor, output_path / "basecolor" / filename)
@@ -118,13 +150,13 @@ def process_sample(item, output_path: Path, resolution: int):
         else:
             caption = f"{material_name}, {category}"
 
-        # Check if metallic is mostly black (non-metallic material)
         is_metallic = not is_mostly_black(metallic)
 
         return {
             "filename": filename,
             "caption": caption,
             "is_metallic": is_metallic,
+            "skipped": False,
         }
 
     except Exception as e:
@@ -137,6 +169,7 @@ def prepare_chained_dataset(
     max_samples: int = None,
     resolution: int = 512,
     num_workers: int = 8,
+    resume: bool = False,
 ):
     """Prepare dataset with all PBR maps for chained training."""
     output_path = Path(output_dir) / "chained"
@@ -149,61 +182,67 @@ def prepare_chained_dataset(
     print(f"Resolution: {resolution}x{resolution}")
     print(f"Workers: {num_workers}")
     print(f"Output: {output_path}")
+    print(f"Resume mode: {resume}")
     print(f"\nMaps to extract: basecolor, normal, roughness, metallic")
 
+    # Load cached dataset
+    print("\nLoading dataset from cache...")
     dataset = load_dataset("gvecchio/MatSynth", split=split)
 
-    processed = 0
-    skipped = 0
+    total_in_dataset = len(dataset)
+    total_samples = total_in_dataset if max_samples is None else min(max_samples, total_in_dataset)
+    print(f"Dataset loaded: {total_in_dataset} materials")
+    print(f"Processing: {total_samples} materials\n")
+
     prompts = {}
     metallic_count = 0
+    skipped = 0
+    already_done = 0
 
-    total_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
-    print(f"\nProcessing {total_samples} materials...")
+    # Use a single ThreadPoolExecutor for all processing
+    pbar = tqdm(total=total_samples, unit="mat", smoothing=0.1)
 
     batch_size = num_workers * 4
     batch = []
 
-    pbar = tqdm(total=total_samples, unit="mat")
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for idx, sample in enumerate(dataset):
+            if idx >= total_samples:
+                break
 
-    for idx, sample in enumerate(dataset):
-        if max_samples and processed >= max_samples:
-            break
+            batch.append((idx, sample, idx, output_path, resolution))
 
-        batch.append((idx, sample, processed))
-        processed += 1
-
-        if len(batch) >= batch_size or (max_samples and processed >= max_samples):
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = {
-                    executor.submit(process_sample, item, output_path, resolution): item
-                    for item in batch
-                }
+            # Process batch when full
+            if len(batch) >= batch_size:
+                futures = [executor.submit(process_sample, item) for item in batch]
 
                 for future in as_completed(futures):
                     result = future.result()
+
                     if result:
                         prompts[result["filename"]] = {
                             "caption": result["caption"],
                             "is_metallic": result["is_metallic"],
                         }
-                        if result["is_metallic"]:
+                        if result.get("skipped"):
+                            already_done += 1
+                        elif result["is_metallic"]:
                             metallic_count += 1
-                        pbar.update(1)
                     else:
                         skipped += 1
-                        pbar.update(1)
 
-            batch = []
+                    pbar.update(1)
 
-    # Process remaining
-    if batch:
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(process_sample, item, output_path, resolution): item
-                for item in batch
-            }
+                batch = []
 
+                # Save progress periodically
+                if len(prompts) % 500 == 0 and len(prompts) > 0:
+                    with open(output_path / "prompts_partial.json", "w") as f:
+                        json.dump(prompts, f)
+
+        # Process remaining batch
+        if batch:
+            futures = [executor.submit(process_sample, item) for item in batch]
             for future in as_completed(futures):
                 result = future.result()
                 if result:
@@ -211,25 +250,32 @@ def prepare_chained_dataset(
                         "caption": result["caption"],
                         "is_metallic": result["is_metallic"],
                     }
-                    if result["is_metallic"]:
+                    if result.get("skipped"):
+                        already_done += 1
+                    elif result["is_metallic"]:
                         metallic_count += 1
-                    pbar.update(1)
                 else:
                     skipped += 1
-                    pbar.update(1)
+                pbar.update(1)
 
     pbar.close()
 
-    # Save prompts
+    # Save final prompts
     with open(output_path / "prompts.json", "w") as f:
         json.dump(prompts, f, indent=2)
+
+    # Remove partial file
+    partial_file = output_path / "prompts_partial.json"
+    if partial_file.exists():
+        partial_file.unlink()
 
     # Save metadata
     meta = {
         "total_samples": len(prompts),
-        "skipped": skipped,
+        "skipped_missing_maps": skipped,
+        "already_processed": already_done,
         "metallic_materials": metallic_count,
-        "non_metallic_materials": len(prompts) - metallic_count,
+        "non_metallic_materials": len(prompts) - metallic_count - already_done,
         "resolution": resolution,
         "maps": ["basecolor", "normal", "roughness", "metallic"],
         "chain_order": ["normal", "roughness", "metallic"],
@@ -240,8 +286,10 @@ def prepare_chained_dataset(
     print(f"\n{'='*50}")
     print(f"Chained dataset prepared!")
     print(f"Total materials: {len(prompts)}")
+    if already_done > 0:
+        print(f"Already processed (resumed): {already_done}")
     print(f"Metallic materials: {metallic_count}")
-    print(f"Non-metallic materials: {len(prompts) - metallic_count}")
+    print(f"Non-metallic materials: {len(prompts) - metallic_count - already_done}")
     print(f"Skipped (missing maps): {skipped}")
     print(f"\nStructure:")
     print(f"  {output_path}/")
@@ -258,6 +306,8 @@ def main():
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=8)
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from partial download (skips existing files)")
 
     args = parser.parse_args()
 
@@ -267,6 +317,7 @@ def main():
         args.max_samples,
         args.resolution,
         args.num_workers,
+        args.resume,
     )
 
 
