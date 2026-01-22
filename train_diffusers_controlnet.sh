@@ -101,7 +101,7 @@ accelerate launch "$TRAIN_SCRIPT" \
     --learning_rate=1e-5 \
     --lr_scheduler="cosine" \
     --lr_warmup_steps=500 \
-    --mixed_precision="bf16" \
+    --mixed_precision="no" \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
     --tracker_project_name="pbr-controlnet-sdxl"
