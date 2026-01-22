@@ -55,8 +55,9 @@ def prepare_chained_dataset(
 
     pbar = tqdm(total=total_samples, unit="mat")
 
-    for idx in range(total_samples):
-        sample = dataset[idx]
+    for idx, sample in enumerate(dataset):
+        if idx >= total_samples:
+            break
         filename = f"{idx:05d}.jpg"
 
         # Skip if already exists
