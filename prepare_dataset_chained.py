@@ -18,12 +18,13 @@ def is_mostly_black(img, threshold=0.05):
     return arr.mean() < threshold
 
 
-def process_and_save(example, idx, output_path, resolution):
+def process_and_save(example, idx, output_dir, resolution):
     """Process single example - called by dataset.map()"""
+    import os
     filename = f"{idx:05d}.jpg"
 
-    bc_path = output_path / "basecolor" / filename
-    if bc_path.exists():
+    bc_path = os.path.join(output_dir, "basecolor", filename)
+    if os.path.exists(bc_path):
         return {"success": True, "filename": filename, "skipped": True}
 
     try:
@@ -45,9 +46,9 @@ def process_and_save(example, idx, output_path, resolution):
             metallic = metallic.resize((resolution, resolution), Image.BILINEAR).convert("RGB")
 
         basecolor.save(bc_path, "JPEG", quality=95)
-        normal.save(output_path / "normal" / filename, "JPEG", quality=95)
-        roughness.save(output_path / "roughness" / filename, "JPEG", quality=95)
-        metallic.save(output_path / "metallic" / filename, "JPEG", quality=95)
+        normal.save(os.path.join(output_dir, "normal", filename), "JPEG", quality=95)
+        roughness.save(os.path.join(output_dir, "roughness", filename), "JPEG", quality=95)
+        metallic.save(os.path.join(output_dir, "metallic", filename), "JPEG", quality=95)
 
         metadata = example.get("metadata", {}) or {}
         name = str(example.get("name", f"material_{idx}"))
@@ -96,8 +97,9 @@ def main():
     print(f"Processing {total} materials with {args.num_workers} workers...")
 
     # Use dataset.map with multiprocessing
+    output_dir = str(output_path)  # Convert to string for multiprocessing
     results = dataset.map(
-        lambda example, idx: process_and_save(example, idx, output_path, args.resolution),
+        lambda example, idx: process_and_save(example, idx, output_dir, args.resolution),
         with_indices=True,
         num_proc=args.num_workers,
         desc="Processing"
