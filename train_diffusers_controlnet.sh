@@ -123,6 +123,8 @@ accelerate launch "$TRAIN_SCRIPT" \
     --mixed_precision="fp16" \
     --checkpointing_steps=1000 \
     --validation_steps=500 \
+    --validation_prompt="normal map, stone brick wall texture, blue purple normal map, pbr texture, seamless tileable" \
+    --validation_image="./data/kohya/$TARGET/conditioning_images/00000.jpg" \
     --use_8bit_adam \
     --gradient_checkpointing \
     --report_to=wandb \
