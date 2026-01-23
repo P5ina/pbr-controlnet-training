@@ -906,6 +906,14 @@ def train(config, resume_path=None):
                     normal_loss = criterion_normal(pred, gt)
                     task_loss = task_loss + 2.0 * normal_loss  # Strong weight for normal quality
 
+                # Metallic-aware loss - penalize missing metallic more heavily
+                if name == 'metallic':
+                    # Where ground truth is metallic (>0), apply higher weight
+                    metallic_mask = (gt > -0.9).float()  # GT values > ~0.05 in [0,1]
+                    if metallic_mask.sum() > 0:
+                        metallic_l1 = (torch.abs(pred - gt) * metallic_mask).sum() / (metallic_mask.sum() + 1e-6)
+                        task_loss = task_loss + 5.0 * metallic_l1  # Strong penalty for missing metallic
+
                 losses[name] = task_loss.item()
                 total_loss += task_loss
 
