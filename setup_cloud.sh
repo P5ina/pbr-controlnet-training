@@ -156,19 +156,10 @@ if [ "$1" == "--wandb" ]; then
 fi
 
 echo "Starting training..."
-echo "Monitor with: tail -f output/multitask/training.log"
-echo "Or use: watch -n 5 nvidia-smi"
+echo "Monitor GPU: watch -n 5 nvidia-smi"
 echo ""
 
-# Run in tmux for persistence
-if command -v tmux &> /dev/null; then
-    tmux new-session -d -s training "python train_multitask.py --config config_multitask.yaml 2>&1 | tee output/multitask/training.log"
-    echo "Training started in tmux session 'training'"
-    echo "Attach with: tmux attach -t training"
-    echo "Detach with: Ctrl+B, then D"
-else
-    python train_multitask.py --config config_multitask.yaml 2>&1 | tee output/multitask/training.log
-fi
+python train_multitask.py --config config_multitask.yaml 2>&1 | tee output/multitask/training.log
 TRAIN_EOF
 chmod +x train.sh
 
