@@ -159,7 +159,7 @@ class MultiTaskPBRGenerator(nn.Module):
             efficientnet.features[3],
             efficientnet.features[4],
             nn.Sequential(efficientnet.features[5], efficientnet.features[6],
-                         efficientnet.features[7], efficientnet.features[8]),
+                         efficientnet.features[7]),  # Exclude features[8] (1792ch head)
         ])
 
         self.bottleneck = nn.Sequential(
@@ -175,7 +175,7 @@ class MultiTaskPBRGenerator(nn.Module):
         self.decoder4 = DecoderBlock(512, 112, 256)
         self.decoder3 = DecoderBlock(256, 56, 128)
         self.decoder2 = DecoderBlock(128, 32, 64)
-        self.decoder1 = DecoderBlock(64, 48, 64)
+        self.decoder1 = DecoderBlock(64, 24, 64)  # 24ch from first encoder stage
         self.decoder0 = DecoderBlock(64, 0, 64)
 
         self.head_normal = OutputHead(64, 3)
@@ -218,7 +218,7 @@ class MultiTaskPBRGeneratorWithText(nn.Module):
             efficientnet.features[3],
             efficientnet.features[4],
             nn.Sequential(efficientnet.features[5], efficientnet.features[6],
-                         efficientnet.features[7], efficientnet.features[8]),
+                         efficientnet.features[7]),  # Exclude features[8] (1792ch head)
         ])
 
         # Bottleneck with self-attention and cross-attention
@@ -238,7 +238,7 @@ class MultiTaskPBRGeneratorWithText(nn.Module):
         self.decoder4 = DecoderBlock(512, 112, 256)
         self.decoder3 = DecoderBlock(256, 56, 128)
         self.decoder2 = DecoderBlock(128, 32, 64)
-        self.decoder1 = DecoderBlock(64, 48, 64)
+        self.decoder1 = DecoderBlock(64, 24, 64)  # 24ch from first encoder stage
         self.decoder0 = DecoderBlock(64, 0, 64)
 
         self.head_normal = OutputHead(64, 3)

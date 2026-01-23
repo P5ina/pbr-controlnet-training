@@ -348,17 +348,17 @@ class MultiTaskPBRGenerator(nn.Module):
             weights=models.EfficientNet_B4_Weights.IMAGENET1K_V1 if pretrained else None
         )
 
-        # Extract encoder stages
+        # Extract encoder stages (excluding features[8] which is the 1792ch head)
         self.encoder_stages = nn.ModuleList([
-            nn.Sequential(efficientnet.features[0], efficientnet.features[1]),  # 48ch, /2
+            nn.Sequential(efficientnet.features[0], efficientnet.features[1]),  # 24ch, /2
             efficientnet.features[2],   # 32ch, /4
             efficientnet.features[3],   # 56ch, /8
             efficientnet.features[4],   # 112ch, /16
-            nn.Sequential(efficientnet.features[5], efficientnet.features[6], efficientnet.features[7], efficientnet.features[8]),  # 448ch, /32
+            nn.Sequential(efficientnet.features[5], efficientnet.features[6], efficientnet.features[7]),  # 448ch, /32
         ])
 
         # Channel counts from EfficientNet-B4
-        self.encoder_channels = [48, 32, 56, 112, 448]
+        self.encoder_channels = [24, 32, 56, 112, 448]
 
         # Text encoder (CLIP)
         if self.use_text_conditioning:
@@ -390,7 +390,7 @@ class MultiTaskPBRGenerator(nn.Module):
         self.decoder4 = DecoderBlock(512, 112, 256)   # /16 -> /8
         self.decoder3 = DecoderBlock(256, 56, 128)    # /8 -> /4
         self.decoder2 = DecoderBlock(128, 32, 64)     # /4 -> /2
-        self.decoder1 = DecoderBlock(64, 48, 64)      # /2 -> /1
+        self.decoder1 = DecoderBlock(64, 24, 64)      # /2 -> /1 (24ch from first encoder stage)
         self.decoder0 = DecoderBlock(64, 0, 64)       # Final upsample
 
         # Task-specific heads
