@@ -65,11 +65,12 @@ class VGGPerceptualLoss(nn.Module):
             for param in block.parameters():
                 param.requires_grad = False
 
-        self.to(device)
-
-        # ImageNet normalization
+        # ImageNet normalization - register before moving to device
         self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+        # Move everything to device
+        self.to(device)
 
     def normalize(self, x):
         # Input is [-1, 1], convert to [0, 1] then normalize
