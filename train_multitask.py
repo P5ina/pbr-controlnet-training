@@ -1,9 +1,10 @@
 """
-Multi-task PBR Generator with Pretrained Encoder and Attention.
+Multi-task PBR Generator with Pretrained Encoder, Attention, and Text Conditioning.
 
 Architecture:
   - Pretrained EfficientNet-B4 encoder (frozen initially, then fine-tuned)
-  - Self-attention in bottleneck for global context
+  - CLIP text encoder for semantic conditioning
+  - Self-attention in bottleneck with text cross-attention
   - Shared decoder trunk with skip connections
   - Separate heads for: Normal (3ch), Roughness (1ch), Metallic (1ch), Height (1ch)
 
@@ -26,12 +27,21 @@ import numpy as np
 from tqdm import tqdm
 import yaml
 import math
+import json
+import re
 
 try:
     import wandb
     HAS_WANDB = True
 except ImportError:
     HAS_WANDB = False
+
+try:
+    from transformers import CLIPTextModel, CLIPTokenizer
+    HAS_CLIP = True
+except ImportError:
+    HAS_CLIP = False
+    print("Warning: transformers not installed, text conditioning disabled")
 
 
 # ============================================================================
@@ -166,7 +176,7 @@ class SelfAttention(nn.Module):
             nn.Linear(channels * 4, channels),
         )
 
-    def forward(self, x):
+    def forward(self, x, text_emb=None):
         B, C, H, W = x.shape
         # Reshape to sequence
         x = x.view(B, C, H * W).permute(0, 2, 1)  # B, HW, C
@@ -182,6 +192,103 @@ class SelfAttention(nn.Module):
         # Reshape back
         x = x.permute(0, 2, 1).view(B, C, H, W)
         return x
+
+
+class CrossAttention(nn.Module):
+    """Cross-attention for text conditioning."""
+    def __init__(self, channels, context_dim=512):
+        super().__init__()
+        self.channels = channels
+        self.context_dim = context_dim
+
+        self.ln_q = nn.LayerNorm(channels)
+        self.ln_kv = nn.LayerNorm(context_dim)
+
+        self.to_q = nn.Linear(channels, channels)
+        self.to_k = nn.Linear(context_dim, channels)
+        self.to_v = nn.Linear(context_dim, channels)
+        self.to_out = nn.Linear(channels, channels)
+
+        self.num_heads = 8
+        self.head_dim = channels // self.num_heads
+
+        self.ff = nn.Sequential(
+            nn.LayerNorm(channels),
+            nn.Linear(channels, channels * 4),
+            nn.GELU(),
+            nn.Linear(channels * 4, channels),
+        )
+
+    def forward(self, x, context):
+        """
+        x: (B, C, H, W) image features
+        context: (B, seq_len, context_dim) text embeddings
+        """
+        B, C, H, W = x.shape
+        x = x.view(B, C, H * W).permute(0, 2, 1)  # B, HW, C
+
+        # Normalize
+        x_ln = self.ln_q(x)
+        context_ln = self.ln_kv(context)
+
+        # Compute Q, K, V
+        q = self.to_q(x_ln)
+        k = self.to_k(context_ln)
+        v = self.to_v(context_ln)
+
+        # Reshape for multi-head attention
+        q = q.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Attention
+        scale = self.head_dim ** -0.5
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+        attn = F.softmax(attn, dim=-1)
+        out = torch.matmul(attn, v)
+
+        # Reshape back
+        out = out.transpose(1, 2).contiguous().view(B, -1, C)
+        out = self.to_out(out)
+
+        x = x + out
+        x = x + self.ff(x)
+
+        x = x.permute(0, 2, 1).view(B, C, H, W)
+        return x
+
+
+class TextEncoder(nn.Module):
+    """CLIP text encoder for semantic conditioning."""
+    def __init__(self, model_name="openai/clip-vit-base-patch32", freeze=True):
+        super().__init__()
+        if not HAS_CLIP:
+            raise ImportError("transformers library required for text conditioning")
+
+        self.tokenizer = CLIPTokenizer.from_pretrained(model_name)
+        self.text_model = CLIPTextModel.from_pretrained(model_name)
+
+        if freeze:
+            for param in self.text_model.parameters():
+                param.requires_grad = False
+
+        self.output_dim = self.text_model.config.hidden_size  # 512 for base
+
+    def forward(self, text_list, device):
+        """
+        text_list: list of strings
+        Returns: (B, seq_len, hidden_size) text embeddings
+        """
+        inputs = self.tokenizer(
+            text_list,
+            padding=True,
+            truncation=True,
+            max_length=77,
+            return_tensors="pt"
+        ).to(device)
+
+        outputs = self.text_model(**inputs)
+        return outputs.last_hidden_state  # (B, seq_len, 512)
 
 
 class DecoderBlock(nn.Module):
@@ -226,14 +333,15 @@ class OutputHead(nn.Module):
 
 class MultiTaskPBRGenerator(nn.Module):
     """
-    Multi-task PBR map generator.
+    Multi-task PBR map generator with optional text conditioning.
 
-    Input: Basecolor image (3 channels)
+    Input: Basecolor image (3 channels) + optional text prompt
     Output: Normal (3ch), Roughness (1ch), Metallic (1ch), Height (1ch)
     """
-    def __init__(self, pretrained=True, freeze_encoder_epochs=5):
+    def __init__(self, pretrained=True, freeze_encoder_epochs=5, use_text_conditioning=True):
         super().__init__()
         self.freeze_encoder_epochs = freeze_encoder_epochs
+        self.use_text_conditioning = use_text_conditioning and HAS_CLIP
 
         # Pretrained EfficientNet-B4 encoder
         efficientnet = models.efficientnet_b4(
@@ -252,12 +360,27 @@ class MultiTaskPBRGenerator(nn.Module):
         # Channel counts from EfficientNet-B4
         self.encoder_channels = [48, 32, 56, 112, 448]
 
+        # Text encoder (CLIP)
+        if self.use_text_conditioning:
+            self.text_encoder = TextEncoder(freeze=True)
+            text_dim = self.text_encoder.output_dim
+        else:
+            self.text_encoder = None
+            text_dim = 512
+
         # Bottleneck with self-attention
-        self.bottleneck = nn.Sequential(
+        self.bottleneck_conv1 = nn.Sequential(
             nn.Conv2d(448, 512, 3, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
-            SelfAttention(512),
+        )
+        self.bottleneck_self_attn = SelfAttention(512)
+
+        # Cross-attention for text conditioning
+        if self.use_text_conditioning:
+            self.bottleneck_cross_attn = CrossAttention(512, context_dim=text_dim)
+
+        self.bottleneck_conv2 = nn.Sequential(
             nn.Conv2d(512, 512, 3, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
@@ -288,7 +411,18 @@ class MultiTaskPBRGenerator(nn.Module):
             for param in stage.parameters():
                 param.requires_grad = True
 
-    def forward(self, x):
+    def forward(self, x, text_prompts=None):
+        """
+        x: (B, 3, H, W) basecolor image
+        text_prompts: list of strings or None
+        """
+        device = x.device
+
+        # Encode text if provided
+        text_emb = None
+        if self.use_text_conditioning and text_prompts is not None:
+            text_emb = self.text_encoder(text_prompts, device)
+
         # Encoder
         skips = []
         for stage in self.encoder_stages:
@@ -296,7 +430,14 @@ class MultiTaskPBRGenerator(nn.Module):
             skips.append(x)
 
         # Bottleneck
-        x = self.bottleneck(x)
+        x = self.bottleneck_conv1(x)
+        x = self.bottleneck_self_attn(x)
+
+        # Cross-attention with text
+        if self.use_text_conditioning and text_emb is not None:
+            x = self.bottleneck_cross_attn(x, text_emb)
+
+        x = self.bottleneck_conv2(x)
 
         # Decoder with skip connections
         x = self.decoder4(x, skips[3])  # Use /16 skip
@@ -323,12 +464,107 @@ class MultiTaskPBRGenerator(nn.Module):
 # DATASET
 # ============================================================================
 
+def generate_prompt_from_filename(filename):
+    """
+    Generate a text prompt from material filename (e.g., ambientCG naming convention).
+
+    Examples:
+        Ground103 -> "ground texture, dirt, earth, outdoor"
+        Metal045 -> "metal texture, metallic surface, shiny"
+        Bricks012 -> "brick texture, wall, masonry"
+        Wood025 -> "wood texture, wooden surface, plank"
+    """
+    # Extract material type and number
+    match = re.match(r'^([A-Za-z]+)(\d+)?', filename)
+    if not match:
+        return f"PBR material texture, {filename}"
+
+    material_type = match.group(1).lower()
+
+    # Material type to descriptive prompts
+    material_prompts = {
+        'ground': 'ground texture, dirt, earth, soil, outdoor terrain',
+        'metal': 'metal texture, metallic surface, shiny metal, industrial',
+        'brick': 'brick texture, wall, masonry, building material',
+        'bricks': 'brick texture, wall, masonry, building material',
+        'wood': 'wood texture, wooden surface, plank, timber, grain',
+        'concrete': 'concrete texture, cement, industrial surface, rough',
+        'fabric': 'fabric texture, cloth, textile, woven material',
+        'leather': 'leather texture, animal hide, soft material',
+        'marble': 'marble texture, stone, polished surface, elegant',
+        'rock': 'rock texture, stone, natural surface, rough',
+        'rocks': 'rock texture, stone, natural surface, rough',
+        'stone': 'stone texture, rock, natural surface, masonry',
+        'tiles': 'tile texture, ceramic, floor, bathroom, kitchen',
+        'tile': 'tile texture, ceramic, floor, bathroom, kitchen',
+        'asphalt': 'asphalt texture, road, pavement, urban',
+        'grass': 'grass texture, lawn, green, nature, outdoor',
+        'sand': 'sand texture, beach, desert, granular',
+        'snow': 'snow texture, winter, cold, white, ice',
+        'water': 'water texture, liquid, wet surface, reflection',
+        'rust': 'rust texture, corroded metal, oxidized, weathered',
+        'plaster': 'plaster texture, wall, smooth surface, interior',
+        'paint': 'painted surface texture, wall paint, coating',
+        'carpet': 'carpet texture, floor covering, soft, fabric',
+        'plastic': 'plastic texture, synthetic material, smooth',
+        'glass': 'glass texture, transparent, reflective, smooth',
+        'paper': 'paper texture, document, fibrous, thin material',
+        'cardboard': 'cardboard texture, packaging, brown, corrugated',
+        'foam': 'foam texture, sponge, porous, soft material',
+        'rubber': 'rubber texture, elastic material, grip surface',
+        'clay': 'clay texture, ceramic, pottery, earth material',
+        'ice': 'ice texture, frozen water, cold, translucent',
+        'lava': 'lava texture, molten rock, volcanic, hot',
+        'moss': 'moss texture, plant, green, natural growth',
+        'bark': 'bark texture, tree, wood, natural surface',
+        'leaf': 'leaf texture, plant, green, natural, organic',
+        'gravel': 'gravel texture, small stones, rough, outdoor',
+        'pebbles': 'pebble texture, smooth stones, river rocks',
+        'mud': 'mud texture, wet earth, dirt, muddy surface',
+        'coal': 'coal texture, black rock, carbon, mineral',
+        'crystal': 'crystal texture, gemstone, transparent, faceted',
+        'chainmail': 'chainmail texture, metal rings, armor',
+        'scale': 'scale texture, reptile, fish, overlapping',
+        'skin': 'skin texture, organic, pores, natural',
+        'fur': 'fur texture, animal hair, soft, fluffy',
+        'linen': 'linen texture, fabric, woven, natural fiber',
+        'silk': 'silk texture, smooth fabric, shiny, luxury',
+        'denim': 'denim texture, jeans, blue fabric, cotton',
+        'knit': 'knit texture, wool, yarn, woven pattern',
+        'wicker': 'wicker texture, woven, basket, natural fiber',
+        'bamboo': 'bamboo texture, plant, natural, asian style',
+        'cork': 'cork texture, natural, porous, brown',
+        'terracotta': 'terracotta texture, clay, pottery, orange',
+        'slate': 'slate texture, stone, layered rock, roof',
+        'granite': 'granite texture, stone, speckled, kitchen',
+        'limestone': 'limestone texture, sedimentary rock, light',
+        'sandstone': 'sandstone texture, sedimentary rock, grainy',
+        'cobblestone': 'cobblestone texture, paved street, old town',
+        'pavement': 'pavement texture, sidewalk, concrete, urban',
+        'roofing': 'roofing texture, shingles, building, shelter',
+        'siding': 'siding texture, house exterior, panels',
+        'stucco': 'stucco texture, wall finish, rough, exterior',
+        'wallpaper': 'wallpaper texture, interior wall, decorative',
+        'decal': 'decal texture, sticker, printed surface',
+        'pattern': 'pattern texture, decorative, repeating design',
+    }
+
+    # Get prompt or create generic one
+    if material_type in material_prompts:
+        return material_prompts[material_type]
+    else:
+        # CamelCase to words: "MetalPlate" -> "metal plate"
+        words = re.sub(r'([A-Z])', r' \1', material_type).strip().lower()
+        return f"{words} texture, PBR material, seamless"
+
+
 class PBRDataset(Dataset):
-    """Dataset for multi-task PBR training."""
-    def __init__(self, data_dir, resolution=512, augment=True):
+    """Dataset for multi-task PBR training with optional text prompts."""
+    def __init__(self, data_dir, resolution=512, augment=True, use_text=True):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         self.augment = augment
+        self.use_text = use_text
 
         # Find all materials
         self.basecolor_dir = self.data_dir / "basecolor"
@@ -349,6 +585,16 @@ class PBRDataset(Dataset):
         self.has_height = self.height_dir.exists() and any(self.height_dir.iterdir())
         if not self.has_height:
             print("  Note: Height maps not found, will skip height output")
+
+        # Load prompts from metadata file if available
+        self.prompts = {}
+        prompts_file = self.data_dir / "prompts.json"
+        if prompts_file.exists():
+            with open(prompts_file) as f:
+                self.prompts = json.load(f)
+            print(f"  Loaded {len(self.prompts)} prompts from prompts.json")
+        elif use_text:
+            print("  No prompts.json found, will generate prompts from filenames")
 
     def __len__(self):
         return len(self.files)
@@ -435,6 +681,15 @@ class PBRDataset(Dataset):
                 metallic = torch.rot90(metallic, k, [1, 2])
                 height = torch.rot90(height, k, [1, 2])
 
+        # Get text prompt
+        if self.use_text:
+            if base_name in self.prompts:
+                prompt = self.prompts[base_name]
+            else:
+                prompt = generate_prompt_from_filename(base_name)
+        else:
+            prompt = ""
+
         return {
             'basecolor': basecolor,
             'normal': normal,
@@ -442,6 +697,7 @@ class PBRDataset(Dataset):
             'metallic': metallic,
             'height': height,
             'name': base_name,
+            'prompt': prompt,
         }
 
 
@@ -466,10 +722,17 @@ def train(config):
         )
 
     # Model
+    use_text = config["model"].get("use_text_conditioning", True) and HAS_CLIP
     model = MultiTaskPBRGenerator(
         pretrained=config["model"]["pretrained"],
         freeze_encoder_epochs=config["model"]["freeze_encoder_epochs"],
+        use_text_conditioning=use_text,
     ).to(device)
+
+    if use_text:
+        print("Text conditioning: ENABLED (using CLIP)")
+    else:
+        print("Text conditioning: DISABLED")
 
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -513,6 +776,7 @@ def train(config):
         config["training"]["data_dir"],
         config["training"]["resolution"],
         augment=config["training"]["augment"],
+        use_text=use_text,
     )
 
     dataloader = DataLoader(
@@ -555,10 +819,11 @@ def train(config):
             roughness_gt = batch['roughness'].to(device)
             metallic_gt = batch['metallic'].to(device)
             height_gt = batch['height'].to(device)
+            prompts = batch['prompt'] if use_text else None
 
             # Forward pass
             optimizer.zero_grad()
-            outputs = model(basecolor)
+            outputs = model(basecolor, text_prompts=prompts)
 
             # Compute losses for each output
             losses = {}
@@ -635,7 +900,7 @@ def train(config):
 
         # Validation
         if (epoch + 1) % config["training"]["validation_epochs"] == 0:
-            validate(model, dataset, config, epoch + 1, device)
+            validate(model, dataset, config, epoch + 1, device, use_text=use_text)
 
         # Save checkpoint
         if (epoch + 1) % config["checkpointing"]["save_epochs"] == 0:
@@ -653,7 +918,7 @@ def train(config):
         wandb.finish()
 
 
-def validate(model, dataset, config, epoch, device):
+def validate(model, dataset, config, epoch, device, use_text=False):
     """Generate validation images."""
     import random
     model.eval()
@@ -674,8 +939,9 @@ def validate(model, dataset, config, epoch, device):
         for i in indices:
             sample = dataset[i]
             basecolor = sample['basecolor'].unsqueeze(0).to(device)
+            prompt = [sample['prompt']] if use_text and sample.get('prompt') else None
 
-            outputs = model(basecolor)
+            outputs = model(basecolor, text_prompts=prompt)
 
             # Convert to numpy images [0, 255]
             def to_img(t, is_grayscale=False):

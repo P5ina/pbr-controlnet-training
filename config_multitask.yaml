@@ -3,6 +3,7 @@
 model:
   pretrained: true                    # Use pretrained EfficientNet encoder
   freeze_encoder_epochs: 5            # Freeze encoder for first N epochs (warmup)
+  use_text_conditioning: true         # Enable CLIP text conditioning (requires transformers)
 
 training:
   data_dir: "./data/materials"        # Directory containing basecolor/, normal/, roughness/, metallic/, height/
