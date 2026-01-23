@@ -137,30 +137,18 @@ class NormalMapLoss(nn.Module):
         super().__init__()
 
     def forward(self, pred, target):
-        # Convert from [-1,1] to normal vectors [0,1] -> normalize
-        pred_norm = pred * 0.5 + 0.5  # to [0,1]
-        target_norm = target * 0.5 + 0.5
-
-        # Convert to actual normal vectors (RGB to XYZ: *2-1)
-        pred_vec = pred_norm * 2 - 1
-        target_vec = target_norm * 2 - 1
-
-        # Normalize to unit length
-        pred_unit = F.normalize(pred_vec, dim=1)
-        target_unit = F.normalize(target_vec, dim=1)
+        # Normalize to unit length (add eps for numerical stability)
+        pred_unit = F.normalize(pred, dim=1, eps=1e-6)
+        target_unit = F.normalize(target, dim=1, eps=1e-6)
 
         # Cosine similarity loss (1 - dot product)
-        cosine_loss = 1 - (pred_unit * target_unit).sum(dim=1).mean()
+        dot = (pred_unit * target_unit).sum(dim=1)
+        cosine_loss = (1 - dot).mean()
 
-        # Angular loss - penalize angle difference
-        dot = (pred_unit * target_unit).sum(dim=1).clamp(-1, 1)
-        angle_loss = torch.acos(dot).mean()
+        # L1 on normalized vectors for additional supervision
+        l1_loss = F.l1_loss(pred_unit, target_unit)
 
-        # Also encourage pred to be unit length (normalization loss)
-        pred_length = torch.norm(pred_vec, dim=1)
-        length_loss = (pred_length - 1).abs().mean()
-
-        return cosine_loss + 0.1 * angle_loss + 0.5 * length_loss
+        return cosine_loss + l1_loss
 
 
 class GradientLoss(nn.Module):
