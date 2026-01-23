@@ -738,7 +738,7 @@ class PBRDataset(Dataset):
 # TRAINING
 # ============================================================================
 
-def train(config):
+def train(config, resume_path=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -792,6 +792,22 @@ def train(config):
         eta_min=config["training"]["learning_rate"] / 100,
     )
 
+    # Resume from checkpoint if provided
+    start_epoch = 0
+    if resume_path:
+        print(f"\nResuming from checkpoint: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        start_epoch = checkpoint['epoch']
+        print(f"Resumed from epoch {start_epoch}, loss: {checkpoint['loss']:.4f}")
+
+        # Unfreeze encoder if we're past the freeze period
+        if start_epoch >= config["model"]["freeze_encoder_epochs"]:
+            model.unfreeze_encoder()
+            print("Encoder is unfrozen (past freeze period)")
+
     # Loss functions
     criterion_l1 = nn.L1Loss()
     criterion_perceptual = VGGPerceptualLoss(device)
@@ -832,7 +848,7 @@ def train(config):
     print(f"Resolution: {config['training']['resolution']}")
     print(f"Loss weights: L1={lambda_l1}, Perceptual={lambda_perceptual}, SSIM={lambda_ssim}, Gradient={lambda_gradient}")
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
 
         # Unfreeze encoder after warmup
@@ -1090,12 +1106,13 @@ def save_final(model, config):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="config_multitask.yaml")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     args = parser.parse_args()
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    train(config)
+    train(config, resume_path=args.resume)
 
 
 if __name__ == "__main__":
