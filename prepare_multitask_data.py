@@ -163,21 +163,33 @@ def download_ambientcg(output_dir, resolution=512, max_materials=1000):
     for material in tqdm(materials, desc="Downloading"):
         asset_id = material.get("assetId", "")
 
-        # Find 1K or 2K download
-        downloads = material.get("downloadFolders", {}).get("default", {}).get("downloadFiletypeCategories", {})
-        zip_data = None
+        # Find download in new API structure (downloads are under "zip" category)
+        download_categories = material.get("downloadFolders", {}).get("default", {}).get("downloadFiletypeCategories", {})
 
-        for res in ["1K-JPG", "2K-JPG", "1K-PNG", "2K-PNG"]:
-            if res in downloads:
-                zip_data = downloads[res].get("downloads", [{}])[0]
+        # Look for zip downloads
+        zip_downloads = download_categories.get("zip", {}).get("downloads", [])
+
+        # Find preferred resolution (1K-JPG preferred, then 2K-JPG, etc.)
+        zip_data = None
+        for preferred in ["1K-JPG", "2K-JPG", "1K-PNG", "2K-PNG"]:
+            for dl in zip_downloads:
+                filename = dl.get("fileName", "")
+                if preferred in filename:
+                    zip_data = dl
+                    break
+            if zip_data:
                 break
+
+        # Fallback to first available if no preferred found
+        if not zip_data and zip_downloads:
+            zip_data = zip_downloads[0]
 
         if not zip_data:
             continue
 
         try:
             # Download and extract
-            zip_url = zip_data.get("fullDownloadPath", "")
+            zip_url = zip_data.get("fullDownloadPath") or zip_data.get("downloadLink", "")
             if not zip_url:
                 continue
 
