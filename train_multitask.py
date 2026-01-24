@@ -900,15 +900,16 @@ def train(config, resume_path=None):
                     ssim = criterion_ssim(pred, gt)
                     gradient = criterion_gradient(pred, gt)
 
-                    # Normal maps: NO VGG perceptual loss (it pushes toward natural image statistics)
-                    # Instead, rely heavily on normal-specific losses
+                    # Normal maps: balanced loss with moderate normal-specific supervision
                     if name == 'normal':
                         normal_loss = criterion_normal(pred, gt)
+                        perceptual = criterion_perceptual(pred, gt)
                         task_loss = (
-                            lambda_l1 * l1 +
+                            lambda_l1 * 2.0 * l1 +  # Stronger L1 for normals
+                            lambda_perceptual * 0.05 * perceptual +  # Light VGG for stability
                             lambda_ssim * ssim +
-                            lambda_gradient * gradient * 3.0 +  # Boost gradient loss for edge detail
-                            10.0 * normal_loss  # Strong normal-specific loss
+                            lambda_gradient * 1.5 * gradient +  # Modest gradient boost
+                            3.0 * normal_loss  # Moderate normal-specific loss
                         )
                     else:
                         # Other maps: use VGG perceptual loss

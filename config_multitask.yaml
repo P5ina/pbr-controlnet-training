@@ -10,7 +10,7 @@ training:
   resolution: 512                     # Training resolution
   batch_size: 64                      # Batch size (H200 can handle 64-128)
   epochs: 100                         # Total epochs
-  learning_rate: 0.0008               # Scaled with batch size (0.0001 * 64/8)
+  learning_rate: 0.0003               # Conservative LR for stability
   weight_decay: 0.01                  # AdamW weight decay
   num_workers: 8                      # More workers to saturate H200
   augment: true                       # Enable data augmentation
