@@ -730,6 +730,12 @@ def train(config, resume_path=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # Mixed precision training
+    use_amp = device.type == "cuda" and config["training"].get("use_amp", True)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    if use_amp:
+        print("Mixed precision (AMP): ENABLED")
+
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
@@ -766,6 +772,12 @@ def train(config, resume_path=None):
         model.freeze_encoder()
         print(f"Encoder frozen for first {config['model']['freeze_encoder_epochs']} epochs")
 
+    # Compile model for faster training (PyTorch 2.0+)
+    if config["training"].get("compile_model", True) and hasattr(torch, "compile"):
+        print("Compiling model with torch.compile()...")
+        model = torch.compile(model)
+        print("Model compiled")
+
     # Optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -788,6 +800,8 @@ def train(config, resume_path=None):
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if 'scaler_state_dict' in checkpoint:
+            scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch']
         print(f"Resumed from epoch {start_epoch}, loss: {checkpoint['loss']:.4f}")
 
@@ -817,13 +831,16 @@ def train(config, resume_path=None):
         use_text=use_text,
     )
 
+    num_workers = config["training"]["num_workers"]
     dataloader = DataLoader(
         dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=True,
-        num_workers=config["training"]["num_workers"],
+        num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
 
     # Training loop
@@ -852,68 +869,79 @@ def train(config, resume_path=None):
         progress = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
 
         for batch in progress:
-            basecolor = batch['basecolor'].to(device)
-            normal_gt = batch['normal'].to(device)
-            roughness_gt = batch['roughness'].to(device)
-            metallic_gt = batch['metallic'].to(device)
-            height_gt = batch['height'].to(device)
+            basecolor = batch['basecolor'].to(device, non_blocking=True)
+            normal_gt = batch['normal'].to(device, non_blocking=True)
+            roughness_gt = batch['roughness'].to(device, non_blocking=True)
+            metallic_gt = batch['metallic'].to(device, non_blocking=True)
+            height_gt = batch['height'].to(device, non_blocking=True)
             prompts = batch['prompt'] if use_text else None
 
-            # Forward pass
-            optimizer.zero_grad()
-            outputs = model(basecolor, text_prompts=prompts)
+            optimizer.zero_grad(set_to_none=True)
 
-            # Compute losses for each output
-            losses = {}
-            total_loss = 0
+            # Forward pass with mixed precision
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                outputs = model(basecolor, text_prompts=prompts)
 
-            for name, pred, gt in [
-                ('normal', outputs['normal'], normal_gt),
-                ('roughness', outputs['roughness'], roughness_gt),
-                ('metallic', outputs['metallic'], metallic_gt),
-                ('height', outputs['height'], height_gt),
-            ]:
-                # Skip height if not available
-                if name == 'height' and not dataset.has_height:
-                    continue
+                # Compute losses for each output
+                losses = {}
+                total_loss = 0
 
-                l1 = criterion_l1(pred, gt)
-                perceptual = criterion_perceptual(pred, gt)
-                ssim = criterion_ssim(pred, gt)
-                gradient = criterion_gradient(pred, gt)
+                for name, pred, gt in [
+                    ('normal', outputs['normal'], normal_gt),
+                    ('roughness', outputs['roughness'], roughness_gt),
+                    ('metallic', outputs['metallic'], metallic_gt),
+                    ('height', outputs['height'], height_gt),
+                ]:
+                    # Skip height if not available
+                    if name == 'height' and not dataset.has_height:
+                        continue
 
-                task_loss = (
-                    lambda_l1 * l1 +
-                    lambda_perceptual * perceptual +
-                    lambda_ssim * ssim +
-                    lambda_gradient * gradient
-                )
+                    l1 = criterion_l1(pred, gt)
+                    ssim = criterion_ssim(pred, gt)
+                    gradient = criterion_gradient(pred, gt)
 
-                # Add normal-specific loss for normal maps
-                if name == 'normal':
-                    normal_loss = criterion_normal(pred, gt)
-                    task_loss = task_loss + 2.0 * normal_loss  # Strong weight for normal quality
+                    # Normal maps: NO VGG perceptual loss (it pushes toward natural image statistics)
+                    # Instead, rely heavily on normal-specific losses
+                    if name == 'normal':
+                        normal_loss = criterion_normal(pred, gt)
+                        task_loss = (
+                            lambda_l1 * l1 +
+                            lambda_ssim * ssim +
+                            lambda_gradient * gradient * 3.0 +  # Boost gradient loss for edge detail
+                            10.0 * normal_loss  # Strong normal-specific loss
+                        )
+                    else:
+                        # Other maps: use VGG perceptual loss
+                        perceptual = criterion_perceptual(pred, gt)
+                        task_loss = (
+                            lambda_l1 * l1 +
+                            lambda_perceptual * perceptual +
+                            lambda_ssim * ssim +
+                            lambda_gradient * gradient
+                        )
 
-                # Metallic-aware loss - penalize missing metallic more heavily
-                if name == 'metallic':
-                    # Where ground truth is metallic (>0), apply higher weight
-                    metallic_mask = (gt > -0.9).float()  # GT values > ~0.05 in [0,1]
-                    if metallic_mask.sum() > 0:
-                        metallic_l1 = (torch.abs(pred - gt) * metallic_mask).sum() / (metallic_mask.sum() + 1e-6)
-                        task_loss = task_loss + 5.0 * metallic_l1  # Strong penalty for missing metallic
+                    # Metallic-aware loss - penalize missing metallic more heavily
+                    if name == 'metallic':
+                        # Where ground truth is metallic (>0), apply higher weight
+                        metallic_mask = (gt > -0.9).float()  # GT values > ~0.05 in [0,1]
+                        if metallic_mask.sum() > 0:
+                            metallic_l1 = (torch.abs(pred - gt) * metallic_mask).sum() / (metallic_mask.sum() + 1e-6)
+                            task_loss = task_loss + 5.0 * metallic_l1  # Strong penalty for missing metallic
 
-                losses[name] = task_loss.item()
-                total_loss += task_loss
+                    losses[name] = task_loss.item()
+                    total_loss += task_loss
 
-                epoch_losses[name] += task_loss.item()
+                    epoch_losses[name] += task_loss.item()
 
-            # Backward pass
-            total_loss.backward()
+            # Backward pass with gradient scaling
+            scaler.scale(total_loss).backward()
 
-            # Gradient clipping
+            # Gradient clipping (unscale first for correct clipping)
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             epoch_losses['total'] += total_loss.item()
             global_step += 1
@@ -955,7 +983,7 @@ def train(config, resume_path=None):
 
         # Save checkpoint
         if (epoch + 1) % config["checkpointing"]["save_epochs"] == 0:
-            save_checkpoint(model, optimizer, scheduler, config, epoch + 1, avg_loss)
+            save_checkpoint(model, optimizer, scheduler, scaler, config, epoch + 1, avg_loss)
 
         # Save best model
         if avg_loss < best_loss:
@@ -1034,7 +1062,7 @@ def validate(model, dataset, config, epoch, device, use_text=False):
     model.train()
 
 
-def save_checkpoint(model, optimizer, scheduler, config, epoch, loss):
+def save_checkpoint(model, optimizer, scheduler, scaler, config, epoch, loss):
     """Save training checkpoint."""
     output_dir = Path(config["checkpointing"]["output_dir"]) / f"checkpoint-epoch{epoch}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1044,6 +1072,7 @@ def save_checkpoint(model, optimizer, scheduler, config, epoch, loss):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
+        'scaler_state_dict': scaler.state_dict(),
         'loss': loss,
     }, output_dir / "checkpoint.pth")
 

@@ -8,13 +8,17 @@ model:
 training:
   data_dir: "./data/materials"        # Directory containing basecolor/, normal/, roughness/, metallic/, height/
   resolution: 512                     # Training resolution
-  batch_size: 8                       # Batch size (reduce if OOM)
+  batch_size: 64                      # Batch size (H200 can handle 64-128)
   epochs: 100                         # Total epochs
-  learning_rate: 0.0001               # Initial learning rate
+  learning_rate: 0.0008               # Scaled with batch size (0.0001 * 64/8)
   weight_decay: 0.01                  # AdamW weight decay
-  num_workers: 4                      # DataLoader workers
+  num_workers: 8                      # More workers to saturate H200
   augment: true                       # Enable data augmentation
   validation_epochs: 5                # Validate every N epochs
+
+  # Performance
+  use_amp: true                       # Mixed precision training (~2x faster)
+  compile_model: true                 # torch.compile() for PyTorch 2.0+
 
   # Loss weights (tune these based on results)
   lambda_l1: 1.0                      # L1 reconstruction loss
