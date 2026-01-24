@@ -132,23 +132,41 @@ class SSIMLoss(nn.Module):
 
 
 class NormalMapLoss(nn.Module):
-    """Loss specifically for normal maps - enforces unit length and correct direction."""
+    """Simple angular loss for normal maps - just cosine similarity."""
     def __init__(self):
         super().__init__()
 
     def forward(self, pred, target):
-        # Normalize to unit length (add eps for numerical stability)
+        # Normalize to unit vectors
         pred_unit = F.normalize(pred, dim=1, eps=1e-6)
         target_unit = F.normalize(target, dim=1, eps=1e-6)
 
-        # Cosine similarity loss (1 - dot product)
-        dot = (pred_unit * target_unit).sum(dim=1)
-        cosine_loss = (1 - dot).mean()
+        # Cosine similarity loss (1 - dot product) - penalizes wrong direction
+        dot = (pred_unit * target_unit).sum(dim=1).clamp(-1, 1)
+        angular_loss = (1 - dot).mean()
 
-        # L1 on normalized vectors for additional supervision
-        l1_loss = F.l1_loss(pred_unit, target_unit)
+        return angular_loss
 
-        return cosine_loss + l1_loss
+
+class BlueChannelLoss(nn.Module):
+    """Encourages blue channel dominance in normal maps (Z-up convention)."""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, target):
+        # pred and target are in [-1, 1] range
+        # For normal maps, blue channel (index 2) should typically be positive and dominant
+
+        # Penalize when pred blue is much lower than target blue
+        blue_pred = pred[:, 2:3, :, :]
+        blue_target = target[:, 2:3, :, :]
+        blue_loss = F.l1_loss(blue_pred, blue_target)
+
+        # Extra penalty when blue channel is negative (should be positive for up-facing normals)
+        # Target blue is usually positive, so pred should match
+        negative_blue_penalty = F.relu(-blue_pred).mean()
+
+        return blue_loss + negative_blue_penalty
 
 
 class GradientLoss(nn.Module):
@@ -816,6 +834,7 @@ def train(config, resume_path=None):
     criterion_ssim = SSIMLoss()
     criterion_gradient = GradientLoss().to(device)
     criterion_normal = NormalMapLoss().to(device)
+    criterion_blue = BlueChannelLoss().to(device)
 
     # Loss weights
     lambda_l1 = config["training"]["lambda_l1"]
@@ -900,12 +919,16 @@ def train(config, resume_path=None):
                     ssim = criterion_ssim(pred, gt)
                     gradient = criterion_gradient(pred, gt)
 
-                    # Normal maps: simple L1 + SSIM + gradient (no NormalMapLoss - it causes instability)
+                    # Normal maps: L1 + angular loss + blue channel loss
                     if name == 'normal':
+                        angular_loss = criterion_normal(pred, gt)
+                        blue_loss = criterion_blue(pred, gt)
                         task_loss = (
-                            3.0 * l1 +  # Strong L1 for direct pixel supervision
+                            2.0 * l1 +  # L1 for pixel supervision
                             lambda_ssim * ssim +
-                            lambda_gradient * gradient
+                            lambda_gradient * gradient +
+                            1.0 * angular_loss +  # Penalize wrong normal direction
+                            2.0 * blue_loss  # Encourage correct blue channel
                         )
                     else:
                         # Other maps: use VGG perceptual loss
