@@ -148,25 +148,22 @@ class NormalMapLoss(nn.Module):
         return angular_loss
 
 
-class BlueChannelLoss(nn.Module):
-    """Encourages blue channel dominance in normal maps (Z-up convention)."""
+class NormalColorLoss(nn.Module):
+    """Ensures normal map has correct color balance (blue dominant, R/G centered)."""
     def __init__(self):
         super().__init__()
 
     def forward(self, pred, target):
         # pred and target are in [-1, 1] range
-        # For normal maps, blue channel (index 2) should typically be positive and dominant
+        # For normal maps: R,G should be around 0 (128 in 0-255), B should be positive
 
-        # Penalize when pred blue is much lower than target blue
-        blue_pred = pred[:, 2:3, :, :]
-        blue_target = target[:, 2:3, :, :]
-        blue_loss = F.l1_loss(blue_pred, blue_target)
+        # Per-channel L1 loss
+        r_loss = F.l1_loss(pred[:, 0:1, :, :], target[:, 0:1, :, :])
+        g_loss = F.l1_loss(pred[:, 1:2, :, :], target[:, 1:2, :, :])
+        b_loss = F.l1_loss(pred[:, 2:3, :, :], target[:, 2:3, :, :])
 
-        # Extra penalty when blue channel is negative (should be positive for up-facing normals)
-        # Target blue is usually positive, so pred should match
-        negative_blue_penalty = F.relu(-blue_pred).mean()
-
-        return blue_loss + negative_blue_penalty
+        # Weight blue channel more heavily
+        return r_loss + g_loss + 2.0 * b_loss
 
 
 class GradientLoss(nn.Module):
@@ -834,7 +831,7 @@ def train(config, resume_path=None):
     criterion_ssim = SSIMLoss()
     criterion_gradient = GradientLoss().to(device)
     criterion_normal = NormalMapLoss().to(device)
-    criterion_blue = BlueChannelLoss().to(device)
+    criterion_color = NormalColorLoss().to(device)
 
     # Loss weights
     lambda_l1 = config["training"]["lambda_l1"]
@@ -919,16 +916,16 @@ def train(config, resume_path=None):
                     ssim = criterion_ssim(pred, gt)
                     gradient = criterion_gradient(pred, gt)
 
-                    # Normal maps: L1 + angular loss + blue channel loss
+                    # Normal maps: L1 + angular loss + color balance loss
                     if name == 'normal':
                         angular_loss = criterion_normal(pred, gt)
-                        blue_loss = criterion_blue(pred, gt)
+                        color_loss = criterion_color(pred, gt)
                         task_loss = (
-                            2.0 * l1 +  # L1 for pixel supervision
+                            1.0 * l1 +  # L1 for pixel supervision
                             lambda_ssim * ssim +
                             lambda_gradient * gradient +
                             1.0 * angular_loss +  # Penalize wrong normal direction
-                            2.0 * blue_loss  # Encourage correct blue channel
+                            2.0 * color_loss  # Per-channel color balance
                         )
                     else:
                         # Other maps: use VGG perceptual loss
