@@ -916,15 +916,15 @@ def train(config, resume_path=None):
                     ssim = criterion_ssim(pred, gt)
                     gradient = criterion_gradient(pred, gt)
 
-                    # Normal maps: L1 + angular loss + color balance loss
+                    # Normal maps: L1 + angular loss + color balance loss + strong gradient
                     if name == 'normal':
                         angular_loss = criterion_normal(pred, gt)
                         color_loss = criterion_color(pred, gt)
                         task_loss = (
                             1.0 * l1 +  # L1 for pixel supervision
-                            lambda_ssim * ssim +
-                            lambda_gradient * gradient +
-                            1.0 * angular_loss +  # Penalize wrong normal direction
+                            1.0 * ssim +  # SSIM for structure
+                            3.0 * gradient +  # Strong gradient for sharp details
+                            1.5 * angular_loss +  # Penalize wrong normal direction
                             2.0 * color_loss  # Per-channel color balance
                         )
                     else:
