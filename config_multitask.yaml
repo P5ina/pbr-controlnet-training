@@ -9,7 +9,7 @@ training:
   data_dir: "./data/materials"        # Directory containing basecolor/, normal/, roughness/, metallic/, height/
   resolution: 512                     # Training resolution
   batch_size: 32                      # Reduced for encoder unfreezing at epoch 6
-  epochs: 100                         # Total epochs
+  epochs: 40                          # Reduced - model peaks around epoch 25
   learning_rate: 0.0001               # Conservative LR for stability
   weight_decay: 0.01                  # AdamW weight decay
   num_workers: 8                      # More workers to saturate H200
@@ -28,7 +28,7 @@ training:
 
 checkpointing:
   output_dir: "./output/multitask"    # Output directory
-  save_epochs: 10                     # Save checkpoint every N epochs
+  save_epochs: 5                      # Save checkpoint every N epochs (more frequent to catch sweet spot)
 
 logging:
   use_wandb: true                     # Log to Weights & Biases
